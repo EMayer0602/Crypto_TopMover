@@ -5,9 +5,85 @@ Scannt Binance nach den Top Gewinnern und Verlierern.
 """
 
 import requests
+import json
+import os
 from typing import List, Dict, Optional
 from datetime import datetime
 import config
+
+
+class ScannerHistory:
+    """Speichert Historie der Top Movers"""
+
+    def __init__(self, history_file: str = "scanner_history.json"):
+        self.history_file = history_file
+        self.history = self._load_history()
+
+    def _load_history(self) -> List[Dict]:
+        """Lädt gespeicherte Historie"""
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, "r") as f:
+                    return json.load(f)
+            except:
+                return []
+        return []
+
+    def _save_history(self):
+        """Speichert Historie"""
+        with open(self.history_file, "w") as f:
+            json.dump(self.history, f, indent=2)
+
+    def add_scan(self, movers: Dict[str, List[Dict]]):
+        """Fügt einen Scan zur Historie hinzu"""
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "gainers": [{"symbol": c["symbol"], "base": c["base"],
+                        "price": c["price"], "change_percent": c["change_percent"]}
+                       for c in movers.get("gainers", [])[:5]],
+            "losers": [{"symbol": c["symbol"], "base": c["base"],
+                       "price": c["price"], "change_percent": c["change_percent"]}
+                      for c in movers.get("losers", [])[:5]]
+        }
+        self.history.append(entry)
+        # Behalte nur die letzten 100 Scans
+        self.history = self.history[-100:]
+        self._save_history()
+
+    def get_history(self, limit: int = 10) -> List[Dict]:
+        """Gibt die letzten X Scans zurück"""
+        return self.history[-limit:][::-1]  # Neueste zuerst
+
+    def print_history(self, limit: int = 10):
+        """Zeigt Historie formatiert an"""
+        history = self.get_history(limit)
+
+        if not history:
+            print("\n📭 Keine Historie vorhanden.\n")
+            return
+
+        print(f"\n{'='*70}")
+        print(f"  SCANNER HISTORIE (letzte {len(history)} Scans)")
+        print(f"{'='*70}")
+
+        for entry in history:
+            ts = datetime.fromisoformat(entry["timestamp"]).strftime("%d.%m.%Y %H:%M")
+            print(f"\n📅 {ts}")
+            print("-" * 40)
+
+            # Top 3 Gainer
+            gainers = entry.get("gainers", [])[:3]
+            if gainers:
+                gainer_str = " | ".join([f"{g['base']} {g['change_percent']:+.1f}%" for g in gainers])
+                print(f"  🚀 {gainer_str}")
+
+            # Top 3 Loser
+            losers = entry.get("losers", [])[:3]
+            if losers:
+                loser_str = " | ".join([f"{l['base']} {l['change_percent']:+.1f}%" for l in losers])
+                print(f"  📉 {loser_str}")
+
+        print(f"\n{'='*70}\n")
 
 
 class BinanceScanner:

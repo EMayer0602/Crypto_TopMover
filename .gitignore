@@ -16,6 +16,10 @@ logs/
 ohlcv_cache/
 *.log
 
+# State files
+scanner_history.json
+paper_trader_state.json
+
 # IDE
 .idea/
 .vscode/

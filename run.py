@@ -7,7 +7,7 @@ Scannt Binance nach Top Gainern/Losern und ermöglicht Paper Trading.
 
 import time
 import sys
-from data_fetcher import BinanceScanner, print_top_movers
+from data_fetcher import BinanceScanner, ScannerHistory, print_top_movers
 from paper_trader import PaperTrader
 import config
 
@@ -20,12 +20,13 @@ def show_menu():
     print("  1. Top Movers anzeigen (Gainer & Loser)")
     print("  2. Top Gainer anzeigen")
     print("  3. Top Loser anzeigen")
-    print("  4. Position kaufen")
-    print("  5. Position verkaufen")
-    print("  6. Offene Positionen anzeigen")
-    print("  7. Trading Statistiken")
-    print("  8. Auto-Trading starten (TP/SL Überwachung)")
-    print("  9. Paper Trader zurücksetzen")
+    print("  4. Scanner Historie anzeigen")
+    print("  5. Position kaufen")
+    print("  6. Position verkaufen")
+    print("  7. Offene Positionen anzeigen")
+    print("  8. Trading Statistiken")
+    print("  9. Auto-Trading starten (TP/SL Überwachung)")
+    print("  r. Paper Trader zurücksetzen")
     print("  0. Beenden")
     print(f"{'='*50}")
     print(f"  Balance: ${trader.balance:,.2f} | Positionen: {len(trader.positions)}")
@@ -121,11 +122,12 @@ def main():
     """Hauptschleife"""
     while True:
         try:
-            choice = show_menu()
+            choice = show_menu().lower()
 
             if choice == "1":
                 movers = scanner.get_top_movers()
                 print_top_movers(movers)
+                history.add_scan(movers)  # Historie speichern
 
             elif choice == "2":
                 gainers = scanner.get_top_gainers()
@@ -136,21 +138,24 @@ def main():
                 print_top_movers({"gainers": [], "losers": losers})
 
             elif choice == "4":
-                buy_menu()
+                history.print_history()
 
             elif choice == "5":
-                sell_menu()
+                buy_menu()
 
             elif choice == "6":
-                trader.show_positions()
+                sell_menu()
 
             elif choice == "7":
-                trader.show_stats()
+                trader.show_positions()
 
             elif choice == "8":
-                auto_trading()
+                trader.show_stats()
 
             elif choice == "9":
+                auto_trading()
+
+            elif choice == "r":
                 confirm = input("  Wirklich zurücksetzen? (j/n): ").lower()
                 if confirm == "j":
                     trader.reset()
@@ -173,4 +178,5 @@ if __name__ == "__main__":
     print("\n🔄 Initialisiere...")
     scanner = BinanceScanner()
     trader = PaperTrader()
+    history = ScannerHistory()
     main()
