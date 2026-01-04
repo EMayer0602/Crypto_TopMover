@@ -201,6 +201,31 @@ class DataFetcher:
         except Exception as e:
             print(f"Error getting current price for {symbol}: {e}")
             return None
+    
+    def get_multiple_prices(self, symbols):
+        """
+        Get current prices for multiple coins efficiently
+        
+        Args:
+            symbols: List of coin symbols (e.g., ['BTC', 'ETH'])
+            
+        Returns:
+            Dictionary mapping symbol to current price
+        """
+        try:
+            market_data = self.fetch_market_data()
+            prices = {}
+            symbols_upper = [s.upper() for s in symbols]
+            
+            for coin in market_data:
+                symbol = coin['symbol'].upper()
+                if symbol in symbols_upper:
+                    prices[symbol] = coin['current_price']
+            
+            return prices
+        except Exception as e:
+            print(f"Error getting prices: {e}")
+            return {}
 
 
 if __name__ == "__main__":

@@ -229,10 +229,14 @@ class PaperTrader:
         
         print(f"\nUpdating {len(self.positions)} open positions...")
         
+        # Batch fetch prices for all open positions
+        symbols = list(self.positions.keys())
+        prices = self.data_fetcher.get_multiple_prices(symbols)
+        
         symbols_to_close = []
         
         for symbol, position in self.positions.items():
-            current_price = self.data_fetcher.get_current_price(symbol)
+            current_price = prices.get(symbol)
             
             if current_price is None:
                 print(f"Could not get current price for {symbol}")
