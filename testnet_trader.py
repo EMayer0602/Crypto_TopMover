@@ -206,6 +206,16 @@ class BinanceTestnetTrader:
                     return float(asset["availableBalance"])
         return 0.0
 
+    def _get_futures_precision(self, symbol: str) -> int:
+        """Holt die Quantity Precision für ein Symbol"""
+        url = f"{self.futures_url}/fapi/v1/exchangeInfo"
+        result = self._request("GET", url)
+        if result:
+            for s in result.get("symbols", []):
+                if s["symbol"] == symbol:
+                    return s.get("quantityPrecision", 3)
+        return 3  # Default
+
     def futures_short(self, symbol: str, usdt_amount: float) -> Optional[dict]:
         """Öffnet SHORT Position (Futures)"""
         # Erst Preis holen
@@ -214,14 +224,20 @@ class BinanceTestnetTrader:
             print(f"❌ Konnte Preis für {symbol} nicht abrufen")
             return None
 
-        quantity = usdt_amount / price
+        # Precision für dieses Symbol holen
+        precision = self._get_futures_precision(symbol)
+        quantity = round(usdt_amount / price, precision)
+
+        if quantity <= 0:
+            print(f"❌ Quantity zu klein für {symbol}")
+            return None
 
         url = f"{self.futures_url}/fapi/v1/order"
         params = {
             "symbol": symbol,
             "side": "SELL",  # SHORT = SELL to open
             "type": "MARKET",
-            "quantity": round(quantity, 3),
+            "quantity": quantity,
         }
 
         result = self._request("POST", url, params, signed=True)
@@ -412,13 +428,11 @@ class BinanceTestnetTrader:
     def show_status(self):
         """Zeigt aktuellen Status"""
         print(f"\n{'='*60}")
-        print("  TESTNET STATUS")
+        print("  TESTNET STATUS (Futures Only)")
         print(f"{'='*60}")
 
-        spot_balance = self.get_spot_balance()
         futures_balance = self.get_futures_balance()
 
-        print(f"  Spot Balance:    ${spot_balance:,.2f} USDT")
         print(f"  Futures Balance: ${futures_balance:,.2f} USDT")
         print(f"  Offene Positionen: {len(self.positions)}")
 
@@ -446,11 +460,11 @@ def run_testnet_auto_trading():
     trader = BinanceTestnetTrader()
 
     print(f"\n{'='*70}")
-    print("  🤖 TESTNET AUTO-TRADING")
+    print("  🤖 TESTNET AUTO-TRADING (Futures Only)")
     print(f"{'='*70}")
     print(f"  Mode: {'TESTNET' if config.USE_TESTNET else '⚠️ LIVE!'}")
-    print(f"  LONG:  Buy bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}%")
-    print(f"  SHORT: Sell bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}%")
+    print(f"  Strategie: SHORT (Fade the Pump)")
+    print(f"  SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
     print(f"  Scan Interval: {config.SCAN_INTERVAL_SECONDS}s")
     print(f"{'='*70}")
     print("  [Strg+C zum Beenden]\n")
@@ -464,29 +478,21 @@ def run_testnet_auto_trading():
             # 1. TP/SL prüfen
             trader.check_positions_tp_sl()
 
-            # 2. Neue LONG Signale (Buy the Dip)
-            if len([p for p in trader.positions.values() if p.side == "LONG"]) < 3:
-                losers = trader.get_top_losers(3)
-                for coin in losers:
-                    if coin["symbol"] not in trader.positions:
-                        print(f"\n[{timestamp}] 📉 LONG SIGNAL: {coin['base']} @ {coin['change_percent']:.1f}%")
-                        trader.spot_buy(coin["symbol"], config.MAX_POSITION_SIZE)
-                        break
-
-            # 3. Neue SHORT Signale (Fade the Pump)
-            if len([p for p in trader.positions.values() if p.side == "SHORT"]) < 2:
-                gainers = trader.get_top_gainers(3)
+            # 2. Neue SHORT Signale (Fade the Pump) - NUR FUTURES
+            if len([p for p in trader.positions.values() if p.side == "SHORT"]) < 3:
+                gainers = trader.get_top_gainers(5)
                 for coin in gainers:
                     key = f"{coin['symbol']}_SHORT"
                     if key not in trader.positions:
                         print(f"\n[{timestamp}] 📈 SHORT SIGNAL: {coin['base']} @ +{coin['change_percent']:.1f}%")
-                        trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
-                        break
+                        result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
+                        if result:
+                            break  # Nur einen Trade pro Runde
 
-            # 4. Status
+            # 3. Status (nur Futures, kein Spot)
+            futures_bal = trader.get_futures_balance()
             print(f"\n[{timestamp}] Positionen: {len(trader.positions)} | "
-                  f"Spot: ${trader.get_spot_balance():,.0f} | "
-                  f"Futures: ${trader.get_futures_balance():,.0f}")
+                  f"Futures: ${futures_bal:,.0f}")
 
             time.sleep(config.SCAN_INTERVAL_SECONDS)
 
