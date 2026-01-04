@@ -7,9 +7,22 @@ from dotenv import load_dotenv
 # .env Datei laden
 load_dotenv()
 
+# === MODUS ===
+USE_TESTNET = True  # True = Testnet (Spielgeld), False = Live (echtes Geld!)
+
 # Binance API Credentials (aus .env)
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+
+# Testnet API Credentials (separate Keys vom Testnet!)
+TESTNET_API_KEY = os.getenv("TESTNET_API_KEY", "")
+TESTNET_API_SECRET = os.getenv("TESTNET_API_SECRET", "")
+
+# API URLs
+BINANCE_SPOT_URL = "https://api.binance.com/api/v3"
+BINANCE_FUTURES_URL = "https://fapi.binance.com"
+TESTNET_SPOT_URL = "https://testnet.binance.vision/api/v3"
+TESTNET_FUTURES_URL = "https://testnet.binancefuture.com"
 
 # Trading Einstellungen
 PAPER_TRADING_CAPITAL = 1000  # Startkapital in USDT
@@ -32,6 +45,11 @@ AUTO_BUY_ENABLED = True           # Automatisch kaufen
 BUY_LOSER_THRESHOLD = -10.0       # Kaufe Coins die -10% oder mehr gefallen sind
 MIN_LOSER_VOLUME = 5000000        # Mindestvolumen für Auto-Buy (5M USDT)
 
+# SHORT Strategie (Futures)
+SHORT_GAINER_THRESHOLD = 25.0     # Shorte Coins die +25% oder mehr gestiegen sind
+SHORT_TAKE_PROFIT = 5.0           # TP für Shorts
+SHORT_STOP_LOSS = 8.0             # SL für Shorts
+
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen
 QUOTE_CURRENCY = "USDT"     # Nur Paare mit USDT handeln
@@ -40,3 +58,17 @@ QUOTE_CURRENCY = "USDT"     # Nur Paare mit USDT handeln
 LOG_TRADES = True
 LOG_DIR = "logs"
 CACHE_DIR = "ohlcv_cache"
+
+
+def get_api_credentials():
+    """Gibt die richtigen API Credentials zurück (Testnet oder Live)"""
+    if USE_TESTNET:
+        return TESTNET_API_KEY, TESTNET_API_SECRET
+    return BINANCE_API_KEY, BINANCE_API_SECRET
+
+
+def get_api_url(futures: bool = False):
+    """Gibt die richtige API URL zurück"""
+    if USE_TESTNET:
+        return TESTNET_FUTURES_URL if futures else TESTNET_SPOT_URL
+    return BINANCE_FUTURES_URL if futures else BINANCE_SPOT_URL

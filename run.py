@@ -10,6 +10,7 @@ import sys
 from data_fetcher import BinanceScanner, ScannerHistory, print_top_movers
 from paper_trader import PaperTrader
 from backtester import run_interactive_backtest
+from testnet_trader import run_testnet_auto_trading
 import config
 
 
@@ -27,6 +28,7 @@ def show_menu():
     print("  7. Offene Positionen anzeigen")
     print("  8. Trading Statistiken")
     print("  9. FULL AUTO TRADING (Mean Reversion)")
+    print("  t. TESTNET TRADING (Echte API, Spielgeld)")
     print("  b. BACKTEST (Historische Simulation)")
     print("  r. Paper Trader zurücksetzen")
     print("  0. Beenden")
@@ -186,6 +188,9 @@ def main():
 
             elif choice == "9":
                 full_auto_trading()
+
+            elif choice == "t":
+                run_testnet_auto_trading()
 
             elif choice == "b":
                 run_interactive_backtest()

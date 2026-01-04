@@ -19,6 +19,8 @@ ohlcv_cache/
 # State files
 scanner_history.json
 paper_trader_state.json
+testnet_state.json
+backtest_trades.csv
 
 # IDE
 .idea/
