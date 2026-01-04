@@ -266,6 +266,133 @@ class Backtester:
         print(f"{'='*80}\n")
 
 
+class ParameterOptimizer:
+    """Optimiert Parameter für die Strategie"""
+
+    def __init__(self):
+        self.results = []
+
+    def optimize(self, days_back: int = 365):
+        """Testet verschiedene Parameter-Kombinationen"""
+        print("\n" + "="*70)
+        print("  PARAMETER OPTIMIZER")
+        print("="*70)
+        print(f"  Teste verschiedene Kombinationen über {days_back} Tage...")
+        print("="*70 + "\n")
+
+        # Parameter-Ranges
+        buy_thresholds = [-5, -8, -10, -12, -15, -20]  # Long: Kaufe bei X% Verlust
+        tp_values = [2, 3, 4, 5, 8, 10]  # Take Profit %
+        sl_values = [2, 3, 5, 8, 10]  # Stop Loss %
+
+        # Originale Config-Werte speichern
+        orig_tp = config.TAKE_PROFIT_PERCENT
+        orig_sl = config.STOP_LOSS_PERCENT
+
+        backtester = Backtester()
+
+        # Symbols einmal laden
+        print("Lade Top Coins...")
+        symbols = backtester.get_top_symbols(20)
+
+        # Historische Daten einmal laden
+        print("Lade historische Daten...")
+        start_time = int((datetime.now() - timedelta(days=days_back)).timestamp() * 1000)
+        symbol_data = {}
+
+        for i, symbol in enumerate(symbols):
+            print(f"  [{i+1}/{len(symbols)}] {symbol}", end="\r")
+            klines = backtester.get_klines(symbol, "1d", start_time)
+            if len(klines) >= 10:
+                symbol_data[symbol] = backtester.calculate_daily_changes(klines)
+            time.sleep(0.05)
+
+        print(f"\n  {len(symbol_data)} Coins mit Daten geladen.\n")
+
+        total_tests = len(buy_thresholds) * len(tp_values) * len(sl_values)
+        current_test = 0
+
+        for buy_thresh in buy_thresholds:
+            for tp in tp_values:
+                for sl in sl_values:
+                    current_test += 1
+                    print(f"  [{current_test}/{total_tests}] Buy: {buy_thresh}% | TP: +{tp}% | SL: -{sl}%", end="\r")
+
+                    # Config temporär ändern
+                    config.TAKE_PROFIT_PERCENT = tp
+                    config.STOP_LOSS_PERCENT = sl
+
+                    # Trades simulieren
+                    trades = []
+                    for symbol, changes in symbol_data.items():
+                        for j, day in enumerate(changes[:-5]):
+                            if day["change_percent"] <= buy_thresh:
+                                future_days = changes[j+1:j+6]
+                                if future_days:
+                                    trade = backtester.simulate_trade(symbol, day, future_days)
+                                    trades.append(trade)
+
+                    if trades:
+                        wins = len([t for t in trades if t.pnl_percent > 0])
+                        total_pnl = sum(t.pnl_usdt for t in trades)
+                        win_rate = wins / len(trades) * 100
+                        avg_pnl = total_pnl / len(trades)
+
+                        self.results.append({
+                            "buy_threshold": buy_thresh,
+                            "take_profit": tp,
+                            "stop_loss": sl,
+                            "trades": len(trades),
+                            "win_rate": win_rate,
+                            "total_pnl": total_pnl,
+                            "avg_pnl": avg_pnl,
+                        })
+
+        # Original Config wiederherstellen
+        config.TAKE_PROFIT_PERCENT = orig_tp
+        config.STOP_LOSS_PERCENT = orig_sl
+
+        print("\n\n" + "="*70)
+        print("  OPTIMIERUNG ABGESCHLOSSEN")
+        print("="*70)
+
+        return self.results
+
+    def print_best_results(self, top_n: int = 15):
+        """Zeigt die besten Parameter-Kombinationen"""
+        if not self.results:
+            print("Keine Ergebnisse vorhanden.")
+            return
+
+        # Nach Profit sortieren
+        sorted_by_profit = sorted(self.results, key=lambda x: x["total_pnl"], reverse=True)
+
+        print(f"\n{'='*80}")
+        print(f"  TOP {top_n} PARAMETER-KOMBINATIONEN (nach Profit)")
+        print(f"{'='*80}")
+        print(f"{'#':<3} {'Buy%':>6} {'TP%':>5} {'SL%':>5} {'Trades':>7} {'WinRate':>8} {'TotalPnL':>12} {'AvgPnL':>10}")
+        print("-" * 80)
+
+        for i, r in enumerate(sorted_by_profit[:top_n], 1):
+            print(f"{i:<3} {r['buy_threshold']:>5}% {r['take_profit']:>4}% {r['stop_loss']:>4}% "
+                  f"{r['trades']:>7} {r['win_rate']:>7.1f}% ${r['total_pnl']:>10,.0f} ${r['avg_pnl']:>9.2f}")
+
+        print(f"{'='*80}")
+
+        # Beste nach Win Rate
+        sorted_by_winrate = sorted([r for r in self.results if r["trades"] >= 50],
+                                   key=lambda x: x["win_rate"], reverse=True)
+
+        if sorted_by_winrate:
+            print(f"\n  TOP {min(5, len(sorted_by_winrate))} nach WIN RATE (min. 50 Trades):")
+            print("-" * 60)
+            for r in sorted_by_winrate[:5]:
+                print(f"  Buy: {r['buy_threshold']}% | TP: +{r['take_profit']}% | SL: -{r['stop_loss']}% "
+                      f"→ {r['win_rate']:.1f}% Win Rate")
+
+        print()
+
+
 def run_interactive_backtest():
     """Interaktiver Backtest"""
     backtester = Backtester()
@@ -273,7 +400,23 @@ def run_interactive_backtest():
     print("\n" + "="*50)
     print("  BACKTEST KONFIGURATION")
     print("="*50)
+    print("  1. Einzelner Backtest")
+    print("  2. Parameter Optimizer")
+    print("="*50)
 
+    mode = input("  Auswahl [1]: ").strip()
+
+    if mode == "2":
+        # Optimizer
+        days = input(f"  Tage zurück [180]: ").strip()
+        days = int(days) if days else 180
+
+        optimizer = ParameterOptimizer()
+        optimizer.optimize(days_back=days)
+        optimizer.print_best_results()
+        return None
+
+    # Einzelner Backtest
     days = input(f"  Tage zurück [365]: ").strip()
     days = int(days) if days else 365
 
