@@ -24,6 +24,7 @@ class BacktestTrade:
     pnl_percent: float
     pnl_usdt: float
     exit_reason: str  # TP, SL, oder END
+    direction: str = "LONG"  # LONG oder SHORT
 
 
 class Backtester:
@@ -156,6 +157,71 @@ class Backtester:
             exit_reason="END"
         )
 
+    def simulate_short_trade(self, symbol: str, entry_data: Dict,
+                             future_klines: List[Dict], tp_percent: float = None,
+                             sl_percent: float = None) -> BacktestTrade:
+        """Simuliert einen SHORT Trade (Futures)"""
+        entry_price = entry_data["close"]
+        entry_date = entry_data["date"]
+        position_size = config.MAX_POSITION_SIZE
+
+        tp = tp_percent if tp_percent else config.TAKE_PROFIT_PERCENT
+        sl = sl_percent if sl_percent else config.STOP_LOSS_PERCENT
+
+        # Bei SHORT: TP wenn Preis FÄLLT, SL wenn Preis STEIGT
+        tp_price = entry_price * (1 - tp / 100)  # Preis muss fallen
+        sl_price = entry_price * (1 + sl / 100)  # Stop wenn Preis steigt
+
+        for day in future_klines:
+            # TP erreicht? (Preis fällt unter TP)
+            if day["low"] <= tp_price:
+                pnl_percent = tp
+                return BacktestTrade(
+                    symbol=symbol,
+                    entry_date=entry_date,
+                    entry_price=entry_price,
+                    exit_date=day["date"],
+                    exit_price=tp_price,
+                    entry_change=entry_data["change_percent"],
+                    pnl_percent=pnl_percent,
+                    pnl_usdt=position_size * pnl_percent / 100,
+                    exit_reason="TP",
+                    direction="SHORT"
+                )
+
+            # SL erreicht? (Preis steigt über SL)
+            if day["high"] >= sl_price:
+                pnl_percent = -sl
+                return BacktestTrade(
+                    symbol=symbol,
+                    entry_date=entry_date,
+                    entry_price=entry_price,
+                    exit_date=day["date"],
+                    exit_price=sl_price,
+                    entry_change=entry_data["change_percent"],
+                    pnl_percent=pnl_percent,
+                    pnl_usdt=position_size * pnl_percent / 100,
+                    exit_reason="SL",
+                    direction="SHORT"
+                )
+
+        # Trade noch offen
+        last_day = future_klines[-1] if future_klines else entry_data
+        # Bei SHORT: Gewinn wenn Preis gefallen, Verlust wenn gestiegen
+        pnl_percent = ((entry_price - last_day["close"]) / entry_price) * 100
+        return BacktestTrade(
+            symbol=symbol,
+            entry_date=entry_date,
+            entry_price=entry_price,
+            exit_date=last_day["date"],
+            exit_price=last_day["close"],
+            entry_change=entry_data["change_percent"],
+            pnl_percent=pnl_percent,
+            pnl_usdt=position_size * pnl_percent / 100,
+            exit_reason="END",
+            direction="SHORT"
+        )
+
     def run_backtest(self, days_back: int = 365, symbols: List[str] = None,
                      buy_threshold: float = None) -> Dict:
         """Führt Backtest durch"""
@@ -264,6 +330,117 @@ class Backtester:
                   f"${trade.exit_price:>7.4f} {trade.pnl_percent:>+7.2f}% {trade.exit_reason:<6}")
 
         print(f"{'='*80}\n")
+
+    def get_equity_curve(self, starting_capital: float = 1000) -> List[Dict]:
+        """Berechnet die Kapitalkurve"""
+        if not self.trades:
+            return []
+
+        # Trades nach Datum sortieren
+        sorted_trades = sorted(self.trades, key=lambda x: x.exit_date)
+
+        equity = starting_capital
+        curve = [{"date": "Start", "equity": equity, "trade": None}]
+
+        for trade in sorted_trades:
+            equity += trade.pnl_usdt
+            curve.append({
+                "date": trade.exit_date,
+                "equity": equity,
+                "trade": trade.symbol.replace("USDT", ""),
+                "pnl": trade.pnl_usdt
+            })
+
+        return curve
+
+    def print_equity_curve(self, starting_capital: float = 1000):
+        """Zeigt Kapitalkurve als ASCII-Chart"""
+        curve = self.get_equity_curve(starting_capital)
+        if not curve:
+            print("Keine Trades für Kapitalkurve.")
+            return
+
+        print(f"\n{'='*70}")
+        print(f"  KAPITALKURVE (Start: ${starting_capital:,.0f})")
+        print(f"{'='*70}")
+
+        # Min/Max für Skalierung
+        equities = [c["equity"] for c in curve]
+        min_eq = min(equities)
+        max_eq = max(equities)
+        range_eq = max_eq - min_eq if max_eq > min_eq else 1
+
+        # ASCII Chart (40 Zeichen breit)
+        chart_width = 40
+
+        for i, point in enumerate(curve):
+            if i == 0:
+                continue  # Skip Start
+
+            # Position berechnen
+            pos = int((point["equity"] - min_eq) / range_eq * chart_width)
+            pos = max(0, min(chart_width - 1, pos))
+
+            # Zeile bauen
+            bar = "─" * pos + "●"
+            emoji = "🟢" if point.get("pnl", 0) >= 0 else "🔴"
+
+            if i <= 20 or i >= len(curve) - 5:  # Erste 20 und letzte 5 zeigen
+                print(f"  {emoji} ${point['equity']:>8,.0f} │{bar}")
+            elif i == 21:
+                print(f"  ... ({len(curve) - 25} weitere Trades) ...")
+
+        print(f"{'='*70}")
+
+        # Statistiken
+        final_equity = curve[-1]["equity"]
+        total_return = ((final_equity - starting_capital) / starting_capital) * 100
+        max_drawdown = self._calculate_max_drawdown(curve)
+
+        print(f"  Start:        ${starting_capital:,.0f}")
+        print(f"  Ende:         ${final_equity:,.0f}")
+        print(f"  Rendite:      {total_return:+.1f}%")
+        print(f"  Max Drawdown: {max_drawdown:.1f}%")
+        print(f"{'='*70}\n")
+
+    def _calculate_max_drawdown(self, curve: List[Dict]) -> float:
+        """Berechnet Maximum Drawdown"""
+        if not curve:
+            return 0
+
+        peak = curve[0]["equity"]
+        max_dd = 0
+
+        for point in curve:
+            if point["equity"] > peak:
+                peak = point["equity"]
+            dd = (peak - point["equity"]) / peak * 100
+            if dd > max_dd:
+                max_dd = dd
+
+        return max_dd
+
+    def export_trades_csv(self, filename: str = "backtest_trades.csv"):
+        """Exportiert Trades als CSV"""
+        if not self.trades:
+            print("Keine Trades zum Exportieren.")
+            return
+
+        import csv
+        with open(filename, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Symbol", "Direction", "Entry Date", "Entry Price",
+                           "Exit Date", "Exit Price", "Entry Change %",
+                           "PnL %", "PnL USDT", "Exit Reason"])
+
+            for t in self.trades:
+                writer.writerow([
+                    t.symbol, t.direction, t.entry_date, t.entry_price,
+                    t.exit_date, t.exit_price, t.entry_change,
+                    t.pnl_percent, t.pnl_usdt, t.exit_reason
+                ])
+
+        print(f"✅ {len(self.trades)} Trades exportiert nach: {filename}")
 
 
 class ParameterOptimizer:
@@ -393,6 +570,179 @@ class ParameterOptimizer:
         print()
 
 
+class FullOptimizer:
+    """Optimiert sowohl LONG als auch SHORT Parameter"""
+
+    def __init__(self):
+        self.long_results = []
+        self.short_results = []
+
+    def optimize(self, days_back: int = 365):
+        """Testet LONG und SHORT Strategien"""
+        print("\n" + "="*70)
+        print("  FULL OPTIMIZER (LONG + SHORT)")
+        print("="*70)
+
+        backtester = Backtester()
+
+        # Symbols laden
+        print("Lade Top Coins...")
+        symbols = backtester.get_top_symbols(25)
+
+        # Daten laden
+        print("Lade historische Daten...")
+        start_time = int((datetime.now() - timedelta(days=days_back)).timestamp() * 1000)
+        symbol_data = {}
+
+        for i, symbol in enumerate(symbols):
+            print(f"  [{i+1}/{len(symbols)}] {symbol}", end="\r")
+            klines = backtester.get_klines(symbol, "1d", start_time)
+            if len(klines) >= 10:
+                symbol_data[symbol] = backtester.calculate_daily_changes(klines)
+            time.sleep(0.05)
+
+        print(f"\n  {len(symbol_data)} Coins geladen.\n")
+
+        # === LONG OPTIMIZATION ===
+        print("="*70)
+        print("  LONG STRATEGIE (Buy the Dip)")
+        print("="*70)
+
+        long_thresholds = [-5, -8, -10, -12, -15, -20]
+        tp_values = [2, 3, 4, 5, 8, 10]
+        sl_values = [2, 3, 5, 8, 10]
+
+        total = len(long_thresholds) * len(tp_values) * len(sl_values)
+        current = 0
+
+        for thresh in long_thresholds:
+            for tp in tp_values:
+                for sl in sl_values:
+                    current += 1
+                    print(f"  LONG [{current}/{total}] Entry: {thresh}% | TP: +{tp}% | SL: -{sl}%", end="\r")
+
+                    config.TAKE_PROFIT_PERCENT = tp
+                    config.STOP_LOSS_PERCENT = sl
+
+                    trades = []
+                    for symbol, changes in symbol_data.items():
+                        for j, day in enumerate(changes[:-5]):
+                            if day["change_percent"] <= thresh:
+                                future = changes[j+1:j+6]
+                                if future:
+                                    trade = backtester.simulate_trade(symbol, day, future)
+                                    trades.append(trade)
+
+                    if trades:
+                        wins = len([t for t in trades if t.pnl_percent > 0])
+                        total_pnl = sum(t.pnl_usdt for t in trades)
+                        self.long_results.append({
+                            "direction": "LONG",
+                            "entry_threshold": thresh,
+                            "take_profit": tp,
+                            "stop_loss": sl,
+                            "trades": len(trades),
+                            "win_rate": wins / len(trades) * 100,
+                            "total_pnl": total_pnl,
+                            "avg_pnl": total_pnl / len(trades),
+                        })
+
+        print("\n")
+
+        # === SHORT OPTIMIZATION ===
+        print("="*70)
+        print("  SHORT STRATEGIE (Fade the Pump)")
+        print("="*70)
+
+        short_thresholds = [10, 15, 20, 25, 30, 40]  # Short bei +X%
+
+        total = len(short_thresholds) * len(tp_values) * len(sl_values)
+        current = 0
+
+        for thresh in short_thresholds:
+            for tp in tp_values:
+                for sl in sl_values:
+                    current += 1
+                    print(f"  SHORT [{current}/{total}] Entry: +{thresh}% | TP: +{tp}% | SL: -{sl}%", end="\r")
+
+                    trades = []
+                    for symbol, changes in symbol_data.items():
+                        for j, day in enumerate(changes[:-5]):
+                            if day["change_percent"] >= thresh:  # Coin stark gestiegen
+                                future = changes[j+1:j+6]
+                                if future:
+                                    trade = backtester.simulate_short_trade(
+                                        symbol, day, future, tp_percent=tp, sl_percent=sl
+                                    )
+                                    trades.append(trade)
+
+                    if trades:
+                        wins = len([t for t in trades if t.pnl_percent > 0])
+                        total_pnl = sum(t.pnl_usdt for t in trades)
+                        self.short_results.append({
+                            "direction": "SHORT",
+                            "entry_threshold": thresh,
+                            "take_profit": tp,
+                            "stop_loss": sl,
+                            "trades": len(trades),
+                            "win_rate": wins / len(trades) * 100,
+                            "total_pnl": total_pnl,
+                            "avg_pnl": total_pnl / len(trades),
+                        })
+
+        print("\n\n" + "="*70)
+        print("  OPTIMIERUNG ABGESCHLOSSEN")
+        print("="*70)
+
+    def print_results(self, top_n: int = 10):
+        """Zeigt die besten Ergebnisse für LONG und SHORT"""
+
+        # LONG Results
+        if self.long_results:
+            sorted_long = sorted(self.long_results, key=lambda x: x["total_pnl"], reverse=True)
+
+            print(f"\n{'='*85}")
+            print(f"  TOP {top_n} LONG STRATEGIEN (Buy the Dip)")
+            print(f"{'='*85}")
+            print(f"{'#':<3} {'Entry':>7} {'TP':>5} {'SL':>5} {'Trades':>7} {'Win%':>7} {'TotalPnL':>12} {'Avg':>10}")
+            print("-" * 85)
+
+            for i, r in enumerate(sorted_long[:top_n], 1):
+                print(f"{i:<3} {r['entry_threshold']:>6}% {r['take_profit']:>4}% {r['stop_loss']:>4}% "
+                      f"{r['trades']:>7} {r['win_rate']:>6.1f}% ${r['total_pnl']:>10,.0f} ${r['avg_pnl']:>9.2f}")
+
+        # SHORT Results
+        if self.short_results:
+            sorted_short = sorted(self.short_results, key=lambda x: x["total_pnl"], reverse=True)
+
+            print(f"\n{'='*85}")
+            print(f"  TOP {top_n} SHORT STRATEGIEN (Fade the Pump)")
+            print(f"{'='*85}")
+            print(f"{'#':<3} {'Entry':>7} {'TP':>5} {'SL':>5} {'Trades':>7} {'Win%':>7} {'TotalPnL':>12} {'Avg':>10}")
+            print("-" * 85)
+
+            for i, r in enumerate(sorted_short[:top_n], 1):
+                print(f"{i:<3} +{r['entry_threshold']:>5}% {r['take_profit']:>4}% {r['stop_loss']:>4}% "
+                      f"{r['trades']:>7} {r['win_rate']:>6.1f}% ${r['total_pnl']:>10,.0f} ${r['avg_pnl']:>9.2f}")
+
+        # Beste Kombinationen
+        print(f"\n{'='*85}")
+        print("  EMPFOHLENE PARAMETER")
+        print(f"{'='*85}")
+
+        if self.long_results:
+            best_long = max(self.long_results, key=lambda x: x["total_pnl"])
+            print(f"  LONG:  Entry: {best_long['entry_threshold']}% | TP: +{best_long['take_profit']}% | "
+                  f"SL: -{best_long['stop_loss']}% → {best_long['win_rate']:.1f}% Win Rate")
+
+        if self.short_results:
+            best_short = max(self.short_results, key=lambda x: x["total_pnl"])
+            print(f"  SHORT: Entry: +{best_short['entry_threshold']}% | TP: +{best_short['take_profit']}% | "
+                  f"SL: -{best_short['stop_loss']}% → {best_short['win_rate']:.1f}% Win Rate")
+
+        print(f"{'='*85}\n")
+
+
 def run_interactive_backtest():
     """Interaktiver Backtest"""
     backtester = Backtester()
@@ -400,14 +750,25 @@ def run_interactive_backtest():
     print("\n" + "="*50)
     print("  BACKTEST KONFIGURATION")
     print("="*50)
-    print("  1. Einzelner Backtest")
-    print("  2. Parameter Optimizer")
+    print("  1. Einzelner Backtest (LONG)")
+    print("  2. Parameter Optimizer (LONG)")
+    print("  3. FULL Optimizer (LONG + SHORT)")
     print("="*50)
 
     mode = input("  Auswahl [1]: ").strip()
 
+    if mode == "3":
+        # Full Optimizer
+        days = input(f"  Tage zurück [180]: ").strip()
+        days = int(days) if days else 180
+
+        optimizer = FullOptimizer()
+        optimizer.optimize(days_back=days)
+        optimizer.print_results()
+        return None
+
     if mode == "2":
-        # Optimizer
+        # Long Optimizer
         days = input(f"  Tage zurück [180]: ").strip()
         days = int(days) if days else 180
 
@@ -428,6 +789,12 @@ def run_interactive_backtest():
 
     backtester.print_results(stats)
     backtester.print_sample_trades()
+    backtester.print_equity_curve()
+
+    # CSV Export anbieten
+    export = input("  Trades als CSV exportieren? (j/n) [n]: ").strip().lower()
+    if export == "j":
+        backtester.export_trades_csv()
 
     return stats
 
