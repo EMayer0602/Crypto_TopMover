@@ -1,0 +1,2 @@
+# OHLCV Cache directory
+This directory caches market data to reduce API calls.

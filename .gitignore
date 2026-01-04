@@ -27,6 +27,8 @@ wheels/
 logs/*.log
 logs/*.json
 ohlcv_cache/*
+!ohlcv_cache/.gitkeep
+!logs/.gitkeep
 *.db
 
 # IDE
