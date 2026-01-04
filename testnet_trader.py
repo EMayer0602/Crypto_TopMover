@@ -207,14 +207,18 @@ class BinanceTestnetTrader:
         return 0.0
 
     def _get_futures_symbols(self) -> set:
-        """Holt alle verfügbaren Futures Symbole"""
+        """Holt alle verfügbaren Futures Symbole (nur aktiv handelbare)"""
         if hasattr(self, '_futures_symbols_cache'):
             return self._futures_symbols_cache
 
         url = f"{self.futures_url}/fapi/v1/exchangeInfo"
         result = self._request("GET", url)
         if result:
-            self._futures_symbols_cache = {s["symbol"] for s in result.get("symbols", [])}
+            # Nur Symbole mit Status "TRADING" sind handelbar
+            self._futures_symbols_cache = {
+                s["symbol"] for s in result.get("symbols", [])
+                if s.get("status") == "TRADING"
+            }
             return self._futures_symbols_cache
         return set()
 
