@@ -21,6 +21,7 @@ TIMEFRAMES = ["1h", "4h", "24h"]  # Verfügbare Timeframes
 DEFAULT_TIMEFRAME = "1h"          # Standard Timeframe
 MIN_VOLUME_USDT = 1000000         # Mindestvolumen in USDT (Filter für kleine Coins)
 TOP_N_MOVERS = 10                 # Anzahl Top Gainer/Loser anzeigen
+MIN_GAINER_PERCENT = 10.0         # Nur Coins mit mind. +10% als Top Gainer
 
 # Take Profit / Stop Loss (in Prozent)
 TAKE_PROFIT_PERCENT = 5.0   # Verkaufen bei +5%

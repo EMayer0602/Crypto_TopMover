@@ -56,15 +56,18 @@ class BinanceScanner:
         return usdt_pairs
 
     def get_top_gainers(self, limit: int = None) -> List[Dict]:
-        """Holt die Top Gainer (höchste positive Veränderung)"""
+        """Holt die Top Gainer (mind. MIN_GAINER_PERCENT Veränderung)"""
         if limit is None:
             limit = config.TOP_N_MOVERS
 
         tickers = self.get_all_tickers()
         usdt_pairs = self.get_usdt_pairs(tickers)
 
+        # Nur Coins mit mind. X% Gewinn (default: 10%)
+        gainers = [p for p in usdt_pairs if p["change_percent"] >= config.MIN_GAINER_PERCENT]
+
         # Nach Gewinn sortieren (absteigend)
-        sorted_pairs = sorted(usdt_pairs, key=lambda x: x["change_percent"], reverse=True)
+        sorted_pairs = sorted(gainers, key=lambda x: x["change_percent"], reverse=True)
         return sorted_pairs[:limit]
 
     def get_top_losers(self, limit: int = None) -> List[Dict]:
@@ -87,12 +90,17 @@ class BinanceScanner:
         tickers = self.get_all_tickers()
         usdt_pairs = self.get_usdt_pairs(tickers)
 
-        # Sortieren
-        sorted_by_change = sorted(usdt_pairs, key=lambda x: x["change_percent"], reverse=True)
+        # Nur Gainer mit mind. X% (default: 10%)
+        gainers = [p for p in usdt_pairs if p["change_percent"] >= config.MIN_GAINER_PERCENT]
+        gainers_sorted = sorted(gainers, key=lambda x: x["change_percent"], reverse=True)
+
+        # Loser (alle negativen)
+        losers = [p for p in usdt_pairs if p["change_percent"] < 0]
+        losers_sorted = sorted(losers, key=lambda x: x["change_percent"])
 
         return {
-            "gainers": sorted_by_change[:limit],
-            "losers": sorted_by_change[-limit:][::-1]  # Umkehren für größten Verlust zuerst
+            "gainers": gainers_sorted[:limit],
+            "losers": losers_sorted[:limit]
         }
 
     def get_ticker_price(self, symbol: str) -> Optional[float]:
