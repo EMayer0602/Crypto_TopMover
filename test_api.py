@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TESTNET_API_KEY = os.getenv("TESTNET_API_KEY", "")
-TESTNET_API_SECRET = os.getenv("TESTNET_API_SECRET", "")
+TESTNET_API_KEY = os.getenv("BINANCE_API_KEY_TEST", "")
+TESTNET_API_SECRET = os.getenv("BINANCE_API_SECRET_TEST", "")
 TESTNET_FUTURES_URL = "https://testnet.binancefuture.com"
 
 def test_connection():
