@@ -24,8 +24,13 @@ TOP_N_MOVERS = 10                 # Anzahl Top Gainer/Loser anzeigen
 MIN_GAINER_PERCENT = 10.0         # Nur Coins mit mind. +10% als Top Gainer
 
 # Take Profit / Stop Loss (in Prozent)
-TAKE_PROFIT_PERCENT = 5.0   # Verkaufen bei +5%
-STOP_LOSS_PERCENT = 3.0     # Verkaufen bei -3%
+TAKE_PROFIT_PERCENT = 4.0   # Verkaufen bei +4% (Mean Reversion Target)
+STOP_LOSS_PERCENT = 5.0     # Verkaufen bei -5%
+
+# Mean Reversion Strategie (automatisch)
+AUTO_BUY_ENABLED = True           # Automatisch kaufen
+BUY_LOSER_THRESHOLD = -10.0       # Kaufe Coins die -10% oder mehr gefallen sind
+MIN_LOSER_VOLUME = 5000000        # Mindestvolumen für Auto-Buy (5M USDT)
 
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen

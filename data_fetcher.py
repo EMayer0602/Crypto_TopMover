@@ -187,6 +187,21 @@ class BinanceScanner:
             return float(response.json().get("price", 0))
         return None
 
+    def get_buy_signals(self) -> List[Dict]:
+        """Findet Coins für Mean Reversion Buy (Loser mit >= -10%)"""
+        tickers = self.get_all_tickers()
+        usdt_pairs = self.get_usdt_pairs(tickers)
+
+        # Nur Coins mit starkem Verlust und hohem Volumen
+        signals = [
+            p for p in usdt_pairs
+            if p["change_percent"] <= config.BUY_LOSER_THRESHOLD
+            and p["volume_usdt"] >= config.MIN_LOSER_VOLUME
+        ]
+
+        # Nach Verlust sortieren (größter Verlust zuerst)
+        return sorted(signals, key=lambda x: x["change_percent"])
+
 
 def print_top_movers(movers: Dict[str, List[Dict]]):
     """Zeigt Top Movers formatiert an"""

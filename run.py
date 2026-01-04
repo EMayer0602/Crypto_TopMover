@@ -25,7 +25,7 @@ def show_menu():
     print("  6. Position verkaufen")
     print("  7. Offene Positionen anzeigen")
     print("  8. Trading Statistiken")
-    print("  9. Auto-Trading starten (TP/SL Überwachung)")
+    print("  9. FULL AUTO TRADING (Mean Reversion)")
     print("  r. Paper Trader zurücksetzen")
     print("  0. Beenden")
     print(f"{'='*50}")
@@ -89,33 +89,63 @@ def sell_menu():
     trader.sell(symbol)
 
 
-def auto_trading():
-    """Auto-Trading mit TP/SL Überwachung"""
-    print(f"\n🤖 Auto-Trading gestartet!")
-    print(f"   Take Profit: +{config.TAKE_PROFIT_PERCENT}%")
-    print(f"   Stop Loss:   -{config.STOP_LOSS_PERCENT}%")
-    print(f"   Interval:    {config.SCAN_INTERVAL_SECONDS}s")
-    print("   [Strg+C zum Beenden]\n")
+def full_auto_trading():
+    """Vollautomatisches Mean Reversion Trading"""
+    print(f"\n{'='*60}")
+    print("  🤖 VOLLAUTOMATISCHES MEAN REVERSION TRADING")
+    print(f"{'='*60}")
+    print(f"  Strategie: Buy the Dip (Loser bei {config.BUY_LOSER_THRESHOLD}%)")
+    print(f"  Take Profit: +{config.TAKE_PROFIT_PERCENT}%")
+    print(f"  Stop Loss:   -{config.STOP_LOSS_PERCENT}%")
+    print(f"  Max Positionen: {config.MAX_OPEN_POSITIONS}")
+    print(f"  Position Size:  ${config.MAX_POSITION_SIZE}")
+    print(f"  Scan Interval:  {config.SCAN_INTERVAL_SECONDS}s")
+    print(f"{'='*60}")
+    print("  [Strg+C zum Beenden]\n")
 
     try:
         while True:
-            # Positionen prüfen
+            timestamp = time.strftime('%H:%M:%S')
+
+            # 1. Offene Positionen auf TP/SL prüfen
             trader.check_positions()
 
-            # Status anzeigen
+            # 2. Neue Buy Signale suchen (wenn Platz für mehr Positionen)
+            if len(trader.positions) < config.MAX_OPEN_POSITIONS:
+                signals = scanner.get_buy_signals()
+
+                for signal in signals:
+                    # Nicht kaufen wenn schon in dieser Position
+                    if signal["symbol"] in trader.positions:
+                        continue
+
+                    # Nicht kaufen wenn kein Geld mehr
+                    if trader.balance < config.MAX_POSITION_SIZE:
+                        break
+
+                    # Kaufen!
+                    print(f"\n[{timestamp}] 📉 SIGNAL: {signal['base']} @ {signal['change_percent']:.1f}%")
+                    trader.buy(signal["symbol"], config.MAX_POSITION_SIZE)
+
+                    # Max Positionen erreicht?
+                    if len(trader.positions) >= config.MAX_OPEN_POSITIONS:
+                        break
+
+            # 3. Status anzeigen
+            print(f"\n[{timestamp}] Balance: ${trader.balance:.2f} | Positionen: {len(trader.positions)}/{config.MAX_OPEN_POSITIONS}")
+
             if trader.positions:
-                print(f"[{time.strftime('%H:%M:%S')}] Überwache {len(trader.positions)} Position(en)...")
                 for symbol, pos in trader.positions.items():
                     price = scanner.get_ticker_price(symbol) or pos.entry_price
                     pnl = pos.pnl_percent(price)
-                    print(f"   {pos.base}: {pnl:+.2f}%")
-            else:
-                print(f"[{time.strftime('%H:%M:%S')}] Keine Positionen offen.")
+                    emoji = "🟢" if pnl >= 0 else "🔴"
+                    print(f"   {emoji} {pos.base}: {pnl:+.2f}% (Entry: ${pos.entry_price:.4f})")
 
             time.sleep(config.SCAN_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
         print("\n\n⏹️  Auto-Trading beendet.")
+        trader.show_stats()
 
 
 def main():
@@ -153,7 +183,7 @@ def main():
                 trader.show_stats()
 
             elif choice == "9":
-                auto_trading()
+                full_auto_trading()
 
             elif choice == "r":
                 confirm = input("  Wirklich zurücksetzen? (j/n): ").lower()
