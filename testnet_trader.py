@@ -206,6 +206,18 @@ class BinanceTestnetTrader:
                     return float(asset["availableBalance"])
         return 0.0
 
+    def _get_futures_symbols(self) -> set:
+        """Holt alle verfügbaren Futures Symbole"""
+        if hasattr(self, '_futures_symbols_cache'):
+            return self._futures_symbols_cache
+
+        url = f"{self.futures_url}/fapi/v1/exchangeInfo"
+        result = self._request("GET", url)
+        if result:
+            self._futures_symbols_cache = {s["symbol"] for s in result.get("symbols", [])}
+            return self._futures_symbols_cache
+        return set()
+
     def _get_futures_precision(self, symbol: str) -> int:
         """Holt die Quantity Precision für ein Symbol"""
         url = f"{self.futures_url}/fapi/v1/exchangeInfo"
@@ -300,6 +312,88 @@ class BinanceTestnetTrader:
 
         return None
 
+    def futures_long(self, symbol: str, usdt_amount: float) -> Optional[dict]:
+        """Öffnet LONG Position (Futures) - Buy the Dip"""
+        price = self._get_futures_price(symbol)
+        if not price:
+            print(f"❌ Konnte Preis für {symbol} nicht abrufen")
+            return None
+
+        precision = self._get_futures_precision(symbol)
+        quantity = round(usdt_amount / price, precision)
+
+        if quantity <= 0:
+            print(f"❌ Quantity zu klein für {symbol}")
+            return None
+
+        url = f"{self.futures_url}/fapi/v1/order"
+        params = {
+            "symbol": symbol,
+            "side": "BUY",  # LONG = BUY to open
+            "type": "MARKET",
+            "quantity": quantity,
+        }
+
+        result = self._request("POST", url, params, signed=True)
+        if result:
+            self.positions[f"{symbol}_LONG"] = TestnetPosition(
+                symbol=symbol,
+                side="LONG",
+                entry_price=price,
+                quantity=quantity,
+                entry_time=datetime.now().isoformat(),
+                order_id=str(result.get("orderId", ""))
+            )
+            self._save_state()
+
+            print(f"✅ LONG: {quantity:.4f} {symbol.replace('USDT', '')} @ ${price:.4f}")
+            return result
+
+        return None
+
+    def futures_close_long(self, symbol: str) -> Optional[dict]:
+        """Schließt LONG Position"""
+        key = f"{symbol}_LONG"
+        if key not in self.positions:
+            print(f"❌ Keine LONG Position in {symbol}")
+            return None
+
+        position = self.positions[key]
+
+        url = f"{self.futures_url}/fapi/v1/order"
+        params = {
+            "symbol": symbol,
+            "side": "SELL",  # LONG schließen = SELL
+            "type": "MARKET",
+            "quantity": position.quantity,
+        }
+
+        result = self._request("POST", url, params, signed=True)
+        if result:
+            exit_price = self._get_futures_price(symbol)
+            # Bei LONG: Gewinn wenn Preis gestiegen
+            pnl = (exit_price - position.entry_price) / position.entry_price * 100
+
+            self.trade_history.append({
+                "symbol": symbol,
+                "side": "LONG",
+                "entry_price": position.entry_price,
+                "exit_price": exit_price,
+                "quantity": position.quantity,
+                "pnl_percent": pnl,
+                "timestamp": datetime.now().isoformat()
+            })
+
+            del self.positions[key]
+            self._save_state()
+
+            emoji = "🟢" if pnl >= 0 else "🔴"
+            print(f"{emoji} CLOSED LONG: {position.quantity:.4f} {symbol.replace('USDT', '')} "
+                  f"@ ${exit_price:.4f} | PnL: {pnl:+.2f}%")
+            return result
+
+        return None
+
     def _get_futures_price(self, symbol: str) -> Optional[float]:
         """Holt aktuellen Futures Preis"""
         url = f"{self.futures_url}/fapi/v1/ticker/price"
@@ -311,8 +405,8 @@ class BinanceTestnetTrader:
     # === LIVE DATEN VON MAINNET ===
 
     def get_top_losers(self, limit: int = 10) -> List[dict]:
-        """Holt Top Losers von MAINNET (für Signale)"""
-        # Immer Mainnet für Marktdaten
+        """Holt Top Losers von MAINNET (für Signale) - nur Futures-fähige"""
+        futures_symbols = self._get_futures_symbols()
         url = "https://api.binance.com/api/v3/ticker/24hr"
         response = self.session.get(url)
 
@@ -325,6 +419,10 @@ class BinanceTestnetTrader:
         for t in tickers:
             symbol = t.get("symbol", "")
             if not symbol.endswith("USDT"):
+                continue
+
+            # NUR Symbole die auf Futures Testnet verfügbar sind
+            if symbol not in futures_symbols:
                 continue
 
             volume = float(t.get("quoteVolume", 0))
@@ -348,7 +446,8 @@ class BinanceTestnetTrader:
         return sorted(usdt_pairs, key=lambda x: x["change_percent"])[:limit]
 
     def get_top_gainers(self, limit: int = 10) -> List[dict]:
-        """Holt Top Gainers von MAINNET (für Short Signale)"""
+        """Holt Top Gainers von MAINNET (für Short Signale) - nur Futures-fähige"""
+        futures_symbols = self._get_futures_symbols()
         url = "https://api.binance.com/api/v3/ticker/24hr"
         response = self.session.get(url)
 
@@ -361,6 +460,10 @@ class BinanceTestnetTrader:
         for t in tickers:
             symbol = t.get("symbol", "")
             if not symbol.endswith("USDT"):
+                continue
+
+            # NUR Symbole die auf Futures Testnet verfügbar sind
+            if symbol not in futures_symbols:
                 continue
 
             volume = float(t.get("quoteVolume", 0))
@@ -389,18 +492,18 @@ class BinanceTestnetTrader:
         """Prüft Positionen auf TP/SL"""
         for key, pos in list(self.positions.items()):
             if pos.side == "LONG":
-                current_price = self._get_spot_price(pos.symbol)
+                current_price = self._get_futures_price(pos.symbol)
                 if not current_price:
                     continue
 
                 pnl = (current_price - pos.entry_price) / pos.entry_price * 100
 
                 if pnl >= config.TAKE_PROFIT_PERCENT:
-                    print(f"📈 TP erreicht für {pos.symbol}")
-                    self.spot_sell(pos.symbol)
+                    print(f"📈 TP erreicht für LONG {pos.symbol}")
+                    self.futures_close_long(pos.symbol)
                 elif pnl <= -config.STOP_LOSS_PERCENT:
-                    print(f"📉 SL erreicht für {pos.symbol}")
-                    self.spot_sell(pos.symbol)
+                    print(f"📉 SL erreicht für LONG {pos.symbol}")
+                    self.futures_close_long(pos.symbol)
 
             elif pos.side == "SHORT":
                 current_price = self._get_futures_price(pos.symbol)
@@ -441,11 +544,10 @@ class BinanceTestnetTrader:
             print("  " + "-" * 52)
 
             for key, pos in self.positions.items():
+                current = self._get_futures_price(pos.symbol) or pos.entry_price
                 if pos.side == "LONG":
-                    current = self._get_spot_price(pos.symbol) or pos.entry_price
                     pnl = (current - pos.entry_price) / pos.entry_price * 100
-                else:
-                    current = self._get_futures_price(pos.symbol) or pos.entry_price
+                else:  # SHORT
                     pnl = (pos.entry_price - current) / pos.entry_price * 100
 
                 emoji = "🟢" if pnl >= 0 else "🔴"
@@ -460,10 +562,11 @@ def run_testnet_auto_trading():
     trader = BinanceTestnetTrader()
 
     print(f"\n{'='*70}")
-    print("  🤖 TESTNET AUTO-TRADING (Futures Only)")
+    print("  🤖 TESTNET AUTO-TRADING (Futures LONG & SHORT)")
     print(f"{'='*70}")
     print(f"  Mode: {'TESTNET' if config.USE_TESTNET else '⚠️ LIVE!'}")
-    print(f"  Strategie: SHORT (Fade the Pump)")
+    print(f"  Position Size: ${config.MAX_POSITION_SIZE}")
+    print(f"  LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
     print(f"  SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
     print(f"  Scan Interval: {config.SCAN_INTERVAL_SECONDS}s")
     print(f"{'='*70}")
@@ -478,8 +581,19 @@ def run_testnet_auto_trading():
             # 1. TP/SL prüfen
             trader.check_positions_tp_sl()
 
-            # 2. Neue SHORT Signale (Fade the Pump) - NUR FUTURES
-            if len([p for p in trader.positions.values() if p.side == "SHORT"]) < 3:
+            # 2. Neue LONG Signale (Buy the Dip) - FUTURES
+            if len([p for p in trader.positions.values() if p.side == "LONG"]) < 2:
+                losers = trader.get_top_losers(5)
+                for coin in losers:
+                    key = f"{coin['symbol']}_LONG"
+                    if key not in trader.positions:
+                        print(f"\n[{timestamp}] 📉 LONG SIGNAL: {coin['base']} @ {coin['change_percent']:.1f}%")
+                        result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
+                        if result:
+                            break  # Nur einen Trade pro Runde
+
+            # 3. Neue SHORT Signale (Fade the Pump) - FUTURES
+            if len([p for p in trader.positions.values() if p.side == "SHORT"]) < 2:
                 gainers = trader.get_top_gainers(5)
                 for coin in gainers:
                     key = f"{coin['symbol']}_SHORT"
@@ -489,7 +603,7 @@ def run_testnet_auto_trading():
                         if result:
                             break  # Nur einen Trade pro Runde
 
-            # 3. Status (nur Futures, kein Spot)
+            # 4. Status
             futures_bal = trader.get_futures_balance()
             print(f"\n[{timestamp}] Positionen: {len(trader.positions)} | "
                   f"Futures: ${futures_bal:,.0f}")

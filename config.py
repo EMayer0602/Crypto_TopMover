@@ -26,7 +26,7 @@ TESTNET_FUTURES_URL = "https://testnet.binancefuture.com"
 
 # Trading Einstellungen
 PAPER_TRADING_CAPITAL = 1000  # Startkapital in USDT
-MAX_POSITION_SIZE = 100       # Max. Investition pro Trade in USDT
+MAX_POSITION_SIZE = 500       # Max. Investition pro Trade in USDT (10% von $5000)
 MAX_OPEN_POSITIONS = 5        # Max. gleichzeitige Positionen
 
 # Top Mover Einstellungen
