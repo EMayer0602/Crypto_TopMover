@@ -9,6 +9,7 @@ import time
 import sys
 from data_fetcher import BinanceScanner, ScannerHistory, print_top_movers
 from paper_trader import PaperTrader
+from backtester import run_interactive_backtest
 import config
 
 
@@ -26,6 +27,7 @@ def show_menu():
     print("  7. Offene Positionen anzeigen")
     print("  8. Trading Statistiken")
     print("  9. FULL AUTO TRADING (Mean Reversion)")
+    print("  b. BACKTEST (Historische Simulation)")
     print("  r. Paper Trader zurücksetzen")
     print("  0. Beenden")
     print(f"{'='*50}")
@@ -184,6 +186,9 @@ def main():
 
             elif choice == "9":
                 full_auto_trading()
+
+            elif choice == "b":
+                run_interactive_backtest()
 
             elif choice == "r":
                 confirm = input("  Wirklich zurücksetzen? (j/n): ").lower()
