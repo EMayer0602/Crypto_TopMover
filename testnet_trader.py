@@ -498,31 +498,41 @@ class BinanceTestnetTrader:
             if pos.side == "LONG":
                 current_price = self._get_futures_price(pos.symbol)
                 if not current_price:
+                    print(f"⚠️  Konnte Preis für {pos.symbol} nicht abrufen")
                     continue
 
                 pnl = (current_price - pos.entry_price) / pos.entry_price * 100
 
                 if pnl >= config.TAKE_PROFIT_PERCENT:
-                    print(f"📈 TP erreicht für LONG {pos.symbol}")
-                    self.futures_close_long(pos.symbol)
+                    print(f"📈 TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
+                    result = self.futures_close_long(pos.symbol)
+                    if not result:
+                        print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
                 elif pnl <= -config.STOP_LOSS_PERCENT:
-                    print(f"📉 SL erreicht für LONG {pos.symbol}")
-                    self.futures_close_long(pos.symbol)
+                    print(f"📉 SL erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
+                    result = self.futures_close_long(pos.symbol)
+                    if not result:
+                        print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
 
             elif pos.side == "SHORT":
                 current_price = self._get_futures_price(pos.symbol)
                 if not current_price:
+                    print(f"⚠️  Konnte Preis für {pos.symbol} nicht abrufen")
                     continue
 
                 # Bei SHORT: Gewinn wenn Preis fällt
                 pnl = (pos.entry_price - current_price) / pos.entry_price * 100
 
                 if pnl >= config.SHORT_TAKE_PROFIT:
-                    print(f"📈 TP erreicht für SHORT {pos.symbol}")
-                    self.futures_close_short(pos.symbol)
+                    print(f"📈 TP erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
+                    result = self.futures_close_short(pos.symbol)
+                    if not result:
+                        print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
                 elif pnl <= -config.SHORT_STOP_LOSS:
-                    print(f"📉 SL erreicht für SHORT {pos.symbol}")
-                    self.futures_close_short(pos.symbol)
+                    print(f"📉 SL erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
+                    result = self.futures_close_short(pos.symbol)
+                    if not result:
+                        print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
 
     def _get_spot_price(self, symbol: str) -> Optional[float]:
         """Holt Spot Preis"""
