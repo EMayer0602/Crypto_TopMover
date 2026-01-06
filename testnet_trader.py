@@ -865,10 +865,10 @@ class BinanceTestnetTrader:
 
     def get_htf_consensus(self, symbol: str = "BTCUSDT") -> dict:
         """
-        Berechnet alle 3 HTF-Indikatoren und gibt Konsens zurück.
-        2 von 3 müssen übereinstimmen für klares Signal.
+        Berechnet alle 3 HTF-Indikatoren für ein Symbol.
+        Returns direction und consensus count.
         """
-        limit = 50  # Genug Daten für alle Indikatoren
+        limit = 50
         klines = self.get_klines(symbol, config.HTF_TIMEFRAME, limit)
 
         if len(klines) < 15:
@@ -877,58 +877,28 @@ class BinanceTestnetTrader:
                 "consensus": 0,
                 "supertrend": "NEUTRAL",
                 "kama": "NEUTRAL",
-                "jma": "NEUTRAL",
-                "info": "Nicht genug Daten"
+                "jma": "NEUTRAL"
             }
 
-        # Alle 3 Indikatoren berechnen
         st = self.calculate_supertrend(klines, config.SUPERTREND_PERIOD, config.SUPERTREND_MULTIPLIER)
         kama = self.calculate_kama(klines, period=10)
         jma = self.calculate_jma(klines, period=7)
 
-        # Votes zählen
-        bullish_votes = 0
-        bearish_votes = 0
+        bullish_votes = sum(1 for d in [st["direction"], kama["direction"], jma["direction"]] if d == "BULLISH")
+        bearish_votes = sum(1 for d in [st["direction"], kama["direction"], jma["direction"]] if d == "BEARISH")
 
-        indicators = {
-            "supertrend": st["direction"],
-            "kama": kama["direction"],
-            "jma": jma["direction"]
-        }
-
-        for name, direction in indicators.items():
-            if direction == "BULLISH":
-                bullish_votes += 1
-            elif direction == "BEARISH":
-                bearish_votes += 1
-
-        # Konsens bestimmen (2 von 3)
         if bullish_votes >= 2:
-            consensus_direction = "BULLISH"
+            direction = "BULLISH"
             consensus = bullish_votes
         elif bearish_votes >= 2:
-            consensus_direction = "BEARISH"
+            direction = "BEARISH"
             consensus = bearish_votes
         else:
-            consensus_direction = "NEUTRAL"
+            direction = "NEUTRAL"
             consensus = 0
 
-        # Info-String bauen
-        st_emoji = "🟢" if st["direction"] == "BULLISH" else "🔴" if st["direction"] == "BEARISH" else "⚪"
-        kama_emoji = "🟢" if kama["direction"] == "BULLISH" else "🔴" if kama["direction"] == "BEARISH" else "⚪"
-        jma_emoji = "🟢" if jma["direction"] == "BULLISH" else "🔴" if jma["direction"] == "BEARISH" else "⚪"
-
-        info = f"ST{st_emoji} KAMA{kama_emoji} JMA{jma_emoji}"
-
-        if consensus_direction == "BULLISH":
-            info += f" → {consensus}/3 BULLISH → Nur Longs"
-        elif consensus_direction == "BEARISH":
-            info += f" → {consensus}/3 BEARISH → Nur Shorts"
-        else:
-            info += " → Kein Konsens → Beide OK"
-
         return {
-            "direction": consensus_direction,
+            "direction": direction,
             "consensus": consensus,
             "supertrend": st["direction"],
             "kama": kama["direction"],
@@ -936,8 +906,92 @@ class BinanceTestnetTrader:
             "st_value": st["value"],
             "kama_value": kama["value"],
             "jma_value": jma["value"],
-            "price": klines[-1]["close"],
-            "info": info
+            "price": klines[-1]["close"]
+        }
+
+    def get_market_consensus(self) -> dict:
+        """
+        Kombiniert BTC + ETH Konsens für ultimatives Markt-Signal.
+        Berechnet auch Signal-Stärke (0-6 Punkte).
+        """
+        btc = self.get_htf_consensus("BTCUSDT")
+        eth = self.get_htf_consensus("ETHUSDT")
+
+        # Emojis für Anzeige
+        def get_emoji(direction):
+            return "🟢" if direction == "BULLISH" else "🔴" if direction == "BEARISH" else "⚪"
+
+        btc_emoji = get_emoji(btc["direction"])
+        eth_emoji = get_emoji(eth["direction"])
+
+        # Signal-Stärke berechnen (0-6)
+        # BTC: max 3 Punkte, ETH: max 3 Punkte
+        strength = 0
+        if btc["direction"] == "BULLISH":
+            strength += btc["consensus"]
+        elif btc["direction"] == "BEARISH":
+            strength -= btc["consensus"]
+
+        if eth["direction"] == "BULLISH":
+            strength += eth["consensus"]
+        elif eth["direction"] == "BEARISH":
+            strength -= eth["consensus"]
+
+        # Finale Richtung bestimmen
+        # Beide müssen in dieselbe Richtung zeigen für starkes Signal
+        if btc["direction"] == "BULLISH" and eth["direction"] == "BULLISH":
+            direction = "BULLISH"
+            strength_label = "STARK" if strength >= 5 else "MODERAT"
+        elif btc["direction"] == "BEARISH" and eth["direction"] == "BEARISH":
+            direction = "BEARISH"
+            strength_label = "STARK" if strength <= -5 else "MODERAT"
+        elif btc["direction"] == "BULLISH" and eth["direction"] == "NEUTRAL":
+            direction = "WEAK_BULLISH"
+            strength_label = "SCHWACH"
+        elif btc["direction"] == "BEARISH" and eth["direction"] == "NEUTRAL":
+            direction = "WEAK_BEARISH"
+            strength_label = "SCHWACH"
+        elif btc["direction"] == "NEUTRAL" and eth["direction"] == "BULLISH":
+            direction = "WEAK_BULLISH"
+            strength_label = "SCHWACH"
+        elif btc["direction"] == "NEUTRAL" and eth["direction"] == "BEARISH":
+            direction = "WEAK_BEARISH"
+            strength_label = "SCHWACH"
+        elif btc["direction"] != eth["direction"] and btc["direction"] != "NEUTRAL" and eth["direction"] != "NEUTRAL":
+            # BTC und ETH widersprechen sich
+            direction = "KONFLIKT"
+            strength_label = "KONFLIKT"
+        else:
+            direction = "NEUTRAL"
+            strength_label = "NEUTRAL"
+
+        # Info-String
+        btc_detail = f"ST{get_emoji(btc['supertrend'])}K{get_emoji(btc['kama'])}J{get_emoji(btc['jma'])}"
+        eth_detail = f"ST{get_emoji(eth['supertrend'])}K{get_emoji(eth['kama'])}J{get_emoji(eth['jma'])}"
+
+        info = f"BTC{btc_emoji}({btc['consensus']}/3) ETH{eth_emoji}({eth['consensus']}/3)"
+
+        if direction == "BULLISH":
+            info += f" → {strength_label} BULL → Nur Longs"
+        elif direction == "BEARISH":
+            info += f" → {strength_label} BEAR → Nur Shorts"
+        elif direction == "WEAK_BULLISH":
+            info += f" → SCHWACH BULL → Longs OK"
+        elif direction == "WEAK_BEARISH":
+            info += f" → SCHWACH BEAR → Shorts OK"
+        elif direction == "KONFLIKT":
+            info += f" → KONFLIKT → Kein Trade!"
+        else:
+            info += f" → NEUTRAL → Beide OK"
+
+        return {
+            "direction": direction,
+            "strength": abs(strength),
+            "strength_label": strength_label,
+            "btc": btc,
+            "eth": eth,
+            "info": info,
+            "detail": f"BTC: {btc_detail} | ETH: {eth_detail}"
         }
 
     def get_market_trend(self) -> dict:
@@ -971,24 +1025,40 @@ class BinanceTestnetTrader:
     def is_trade_allowed_by_market(self, trade_side: str) -> tuple:
         """
         Prüft ob Trade-Richtung vom Markt erlaubt ist.
-        Nutzt HTF Consensus (Supertrend + KAMA + JMA) wenn aktiviert.
+        Nutzt BTC + ETH Consensus (je 3 Indikatoren = 6 total).
         """
-        # HTF Consensus Filter (alle 3 Indikatoren)
+        # HTF Consensus Filter (BTC + ETH kombiniert)
         if config.USE_HTF_SUPERTREND:
-            consensus = self.get_htf_consensus("BTCUSDT")
+            market = self.get_market_consensus()
 
-            if consensus["direction"] == "BULLISH":
+            # KONFLIKT = BTC und ETH widersprechen sich → Kein Trade
+            if market["direction"] == "KONFLIKT":
+                return (False, market["info"])
+
+            # STARK BULLISH/BEARISH = Beide stimmen überein
+            if market["direction"] == "BULLISH":
                 if trade_side == "SHORT":
-                    return (False, consensus["info"])
-                return (True, consensus["info"])
+                    return (False, market["info"])
+                return (True, market["info"])
 
-            elif consensus["direction"] == "BEARISH":
+            elif market["direction"] == "BEARISH":
                 if trade_side == "LONG":
-                    return (False, consensus["info"])
-                return (True, consensus["info"])
+                    return (False, market["info"])
+                return (True, market["info"])
 
-            else:  # NEUTRAL - kein Konsens
-                return (True, consensus["info"])
+            # SCHWACH = Nur einer zeigt Richtung
+            elif market["direction"] == "WEAK_BULLISH":
+                if trade_side == "SHORT":
+                    return (False, market["info"])
+                return (True, market["info"])
+
+            elif market["direction"] == "WEAK_BEARISH":
+                if trade_side == "LONG":
+                    return (False, market["info"])
+                return (True, market["info"])
+
+            # NEUTRAL = Beide neutral
+            return (True, market["info"])
 
         # Legacy BTC/ETH Filter
         if config.USE_BTC_MARKET_FILTER:
@@ -1181,7 +1251,8 @@ def run_testnet_auto_trading():
         print(f"    Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
     print(f"  HTF Consensus Filter: {'✅ AN' if config.USE_HTF_SUPERTREND else '❌ AUS'}")
     if config.USE_HTF_SUPERTREND:
-        print(f"    BTC {config.HTF_TIMEFRAME} | Supertrend + KAMA + JMA (2/3 Konsens)")
+        print(f"    BTC + ETH {config.HTF_TIMEFRAME} | Je 3 Indikatoren (ST+KAMA+JMA)")
+        print(f"    Signal-Stärke: STARK (5-6/6) | MODERAT (4/6) | SCHWACH (<4/6)")
     print(f"  BTC/ETH 24h-Filter: {'✅ AN' if config.USE_BTC_MARKET_FILTER else '❌ AUS'}")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
@@ -1208,8 +1279,9 @@ def run_testnet_auto_trading():
             short_allowed, short_reason = trader.is_trade_allowed_by_market("SHORT")
 
             if config.USE_HTF_SUPERTREND:
-                consensus = trader.get_htf_consensus("BTCUSDT")
-                print(f"\n[{timestamp}] 📊 HTF {config.HTF_TIMEFRAME}: {consensus['info']}")
+                market = trader.get_market_consensus()
+                print(f"\n[{timestamp}] 📊 HTF {config.HTF_TIMEFRAME}: {market['info']}")
+                print(f"    {market['detail']}")
             else:
                 market = trader.get_market_trend()
                 print(f"\n[{timestamp}] 📊 Markt: BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%")
