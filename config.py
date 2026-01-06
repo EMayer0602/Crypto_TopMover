@@ -61,6 +61,11 @@ BREAKOUT_LOOKBACK_DAYS = 5        # Wie viele Tage zurück schauen für High/Low
 BREAKOUT_MIN_PERCENT = 2.0        # Min. Breakout über High/Low in %
 USE_BREAKOUT_DETECTION = True     # Breakout-Modus statt fester Trend
 
+# BTC Markt-Filter (verhindert Trades gegen den Gesamtmarkt)
+USE_BTC_MARKET_FILTER = True      # BTC als Markt-Indikator nutzen
+BTC_TREND_THRESHOLD = 3.0         # Ab +/-3% 24h gilt BTC als trending
+BTC_TREND_TIMEFRAME = "24h"       # Timeframe für BTC-Check (1h, 4h, 24h)
+
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen
 QUOTE_CURRENCY = "USDT"     # Nur Paare mit USDT handeln

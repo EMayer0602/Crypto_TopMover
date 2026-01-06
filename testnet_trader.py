@@ -618,6 +618,94 @@ class BinanceTestnetTrader:
         else:
             return "CHOPPY"
 
+    def get_market_trend(self) -> dict:
+        """
+        Prüft BTC + ETH als kombinierte Markt-Indikatoren.
+        Returns: {"direction": "BULLISH"|"BEARISH"|"NEUTRAL",
+                  "btc_change": float, "eth_change": float, "avg_change": float}
+        """
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+
+        # BTC abrufen
+        btc_response = self.session.get(url, params={"symbol": "BTCUSDT"})
+        btc_change = 0.0
+        if btc_response.status_code == 200:
+            btc_change = float(btc_response.json().get("priceChangePercent", 0))
+
+        # ETH abrufen
+        eth_response = self.session.get(url, params={"symbol": "ETHUSDT"})
+        eth_change = 0.0
+        if eth_response.status_code == 200:
+            eth_change = float(eth_response.json().get("priceChangePercent", 0))
+
+        # Durchschnitt (BTC gewichtet stärker: 60/40)
+        avg_change = (btc_change * 0.6) + (eth_change * 0.4)
+
+        # Richtung bestimmen - beide müssen in dieselbe Richtung zeigen für klares Signal
+        btc_bullish = btc_change >= config.BTC_TREND_THRESHOLD
+        btc_bearish = btc_change <= -config.BTC_TREND_THRESHOLD
+        eth_bullish = eth_change >= config.BTC_TREND_THRESHOLD
+        eth_bearish = eth_change <= -config.BTC_TREND_THRESHOLD
+
+        if btc_bearish and eth_bearish:
+            direction = "BEARISH"
+        elif btc_bullish and eth_bullish:
+            direction = "BULLISH"
+        elif btc_bearish or eth_bearish:
+            # Einer fällt stark - vorsichtig sein mit Longs
+            direction = "WEAK_BEARISH"
+        elif btc_bullish or eth_bullish:
+            # Einer steigt stark - vorsichtig sein mit Shorts
+            direction = "WEAK_BULLISH"
+        else:
+            direction = "NEUTRAL"
+
+        return {
+            "direction": direction,
+            "btc_change": btc_change,
+            "eth_change": eth_change,
+            "avg_change": avg_change
+        }
+
+    def is_trade_allowed_by_market(self, trade_side: str) -> tuple:
+        """
+        Prüft ob Trade-Richtung vom Markt erlaubt ist.
+        trade_side: "LONG" oder "SHORT"
+        Returns: (allowed: bool, reason: str)
+        """
+        if not config.USE_BTC_MARKET_FILTER:
+            return (True, "Filter deaktiviert")
+
+        market = self.get_market_trend()
+        info = f"BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%"
+
+        if market["direction"] == "BEARISH":
+            if trade_side == "LONG":
+                return (False, f"{info} - keine Longs bei Gewinnmitnahmen")
+            else:
+                return (True, f"{info} - Shorts erlaubt")
+
+        elif market["direction"] == "WEAK_BEARISH":
+            if trade_side == "LONG":
+                return (False, f"{info} - Markt schwächelt, keine Longs")
+            else:
+                return (True, f"{info} - Shorts erlaubt")
+
+        elif market["direction"] == "BULLISH":
+            if trade_side == "SHORT":
+                return (False, f"{info} - keine Shorts im Bullenmarkt")
+            else:
+                return (True, f"{info} - Longs erlaubt")
+
+        elif market["direction"] == "WEAK_BULLISH":
+            if trade_side == "SHORT":
+                return (False, f"{info} - Markt bullish, keine Shorts")
+            else:
+                return (True, f"{info} - Longs erlaubt")
+
+        else:  # NEUTRAL
+            return (True, f"{info} - beide Richtungen erlaubt")
+
     def check_breakout(self, symbol: str) -> str:
         """
         Prüft ob aktueller Preis ein Breakout/Breakdown ist.
@@ -788,6 +876,9 @@ def run_testnet_auto_trading():
     print(f"  Trend-Filter: {'✅ AN' if config.USE_TREND_FILTER else '❌ AUS'}")
     if config.USE_TREND_FILTER:
         print(f"    Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
+    print(f"  BTC/ETH Markt-Filter: {'✅ AN' if config.USE_BTC_MARKET_FILTER else '❌ AUS'}")
+    if config.USE_BTC_MARKET_FILTER:
+        print(f"    Threshold: +/-{config.BTC_TREND_THRESHOLD}%")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
     print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
@@ -808,13 +899,25 @@ def run_testnet_auto_trading():
             long_count = len([p for p in trader.positions.values() if p.side == "LONG"])
             short_count = len([p for p in trader.positions.values() if p.side == "SHORT"])
 
-            # 2. BREAKOUT DETECTION (wenn aktiviert)
+            # 2. Markt-Check (BTC + ETH)
+            market = trader.get_market_trend()
+            market_info = f"BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%"
+            long_allowed, long_reason = trader.is_trade_allowed_by_market("LONG")
+            short_allowed, short_reason = trader.is_trade_allowed_by_market("SHORT")
+
+            print(f"\n[{timestamp}] 📊 Markt: {market_info} → {market['direction']}")
+            if not long_allowed:
+                print(f"  ⛔ Keine Longs: {long_reason}")
+            if not short_allowed:
+                print(f"  ⛔ Keine Shorts: {short_reason}")
+
+            # 3. BREAKOUT DETECTION (wenn aktiviert)
             if config.USE_BREAKOUT_DETECTION and (long_count < 2 or short_count < 2):
                 print(f"\n[{timestamp}] 🔍 Suche Breakout-Signale...")
                 breakout_signals = trader.get_breakout_signals(5)
 
                 for coin in breakout_signals:
-                    if coin["breakout"] == "BREAKOUT_UP" and long_count < 2:
+                    if coin["breakout"] == "BREAKOUT_UP" and long_count < 2 and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 🚀 BREAKOUT LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (über {config.BREAKOUT_LOOKBACK_DAYS}-Tage High)")
@@ -823,7 +926,7 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < 2:
+                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < 2 and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 💥 BREAKOUT SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (unter {config.BREAKOUT_LOOKBACK_DAYS}-Tage Low)")
@@ -832,13 +935,13 @@ def run_testnet_auto_trading():
                                 short_count += 1
                                 break
 
-            # 2b. TREND-FOLLOWING (Fallback wenn kein Breakout)
+            # 3b. TREND-FOLLOWING (Fallback wenn kein Breakout)
             elif config.USE_TREND_FILTER and (long_count < 2 or short_count < 2):
                 print(f"\n[{timestamp}] 🔍 Suche Trend-Signale...")
                 trend_signals = trader.get_trend_signals(5)
 
                 for coin in trend_signals:
-                    if coin["trend"] == "UP" and long_count < 2:
+                    if coin["trend"] == "UP" and long_count < 2 and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 📈 TREND LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage UP)")
@@ -847,7 +950,7 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["trend"] == "DOWN" and short_count < 2:
+                    elif coin["trend"] == "DOWN" and short_count < 2 and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 📉 TREND SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage DOWN)")
@@ -856,11 +959,11 @@ def run_testnet_auto_trading():
                                 short_count += 1
                                 break
 
-            # 3. MEAN REVERSION (Fallback wenn keine Trend-Signale)
+            # 4. MEAN REVERSION (Fallback wenn keine Trend-Signale)
             # Nur wenn Trend-Filter aus ist ODER keine Trend-Signale gefunden wurden
 
             # LONG: Buy the Dip
-            if long_count < 2:
+            if long_count < 2 and long_allowed:
                 losers = trader.get_top_losers(5)
                 for coin in losers:
                     key = f"{coin['symbol']}_LONG"
@@ -878,7 +981,7 @@ def run_testnet_auto_trading():
                             break
 
             # SHORT: Fade the Pump
-            if short_count < 2:
+            if short_count < 2 and short_allowed:
                 gainers = trader.get_top_gainers(5)
                 for coin in gainers:
                     key = f"{coin['symbol']}_SHORT"
