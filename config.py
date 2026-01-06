@@ -50,6 +50,12 @@ SHORT_GAINER_THRESHOLD = 25.0     # Shorte Coins die +25% oder mehr gestiegen si
 SHORT_TAKE_PROFIT = 5.0           # TP für Shorts
 SHORT_STOP_LOSS = 8.0             # SL für Shorts
 
+# Trend-Filter Einstellungen
+TREND_CHECK_DAYS = 3              # Anzahl Tage für Trend-Check
+TREND_MAX_PULLBACK = 2.0          # Max. erlaubte Gegenbewegung in % (sonst = choppy)
+TREND_MIN_MOVE = 5.0              # Min. Gesamtbewegung über 3 Tage für Trend
+USE_TREND_FILTER = True           # Trend-Filter aktivieren
+
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen
 QUOTE_CURRENCY = "USDT"     # Nur Paare mit USDT handeln

@@ -542,6 +542,129 @@ class BinanceTestnetTrader:
             return float(response.json().get("price", 0))
         return None
 
+    # === TREND CHECK ===
+
+    def get_klines(self, symbol: str, interval: str = "1d", limit: int = 4) -> List[dict]:
+        """Holt historische Klines von Mainnet"""
+        url = "https://api.binance.com/api/v3/klines"
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit
+        }
+        response = self.session.get(url, params=params)
+        if response.status_code != 200:
+            return []
+
+        klines = response.json()
+        return [{
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
+        } for k in klines]
+
+    def check_trend_consistency(self, symbol: str) -> str:
+        """
+        Prüft die letzten 3 Tage auf Trend-Konsistenz.
+        Returns: "UP", "DOWN", oder "CHOPPY"
+        """
+        klines = self.get_klines(symbol, "1d", config.TREND_CHECK_DAYS + 1)
+        if len(klines) < config.TREND_CHECK_DAYS + 1:
+            return "CHOPPY"  # Nicht genug Daten
+
+        # Berechne tägliche Änderungen
+        daily_changes = []
+        max_pullback = 0.0
+
+        for i in range(1, len(klines)):
+            prev_close = klines[i-1]["close"]
+            curr = klines[i]
+
+            # Tägliche Änderung (Close zu Close)
+            change = ((curr["close"] - prev_close) / prev_close) * 100
+            daily_changes.append(change)
+
+            # Intraday Pullback berechnen
+            if change > 0:  # Aufwärtstag
+                # Pullback = wie weit fiel der Preis vom High?
+                pullback = ((curr["high"] - curr["low"]) / curr["high"]) * 100
+            else:  # Abwärtstag
+                # Pullback = wie weit stieg der Preis vom Low?
+                pullback = ((curr["high"] - curr["low"]) / curr["low"]) * 100
+
+            max_pullback = max(max_pullback, pullback)
+
+        # Gesamtbewegung über die Periode
+        total_move = sum(daily_changes)
+
+        # Prüfe auf konsistenten Trend
+        all_up = all(c > 0 for c in daily_changes)
+        all_down = all(c < 0 for c in daily_changes)
+
+        # Debug output
+        print(f"  📊 {symbol}: Daily: {[f'{c:+.1f}%' for c in daily_changes]} | "
+              f"Total: {total_move:+.1f}% | MaxPullback: {max_pullback:.1f}%")
+
+        # Entscheidung
+        if max_pullback > config.TREND_MAX_PULLBACK * 2:  # Zu volatile
+            return "CHOPPY"
+
+        if all_up and total_move >= config.TREND_MIN_MOVE:
+            return "UP"
+        elif all_down and abs(total_move) >= config.TREND_MIN_MOVE:
+            return "DOWN"
+        else:
+            return "CHOPPY"
+
+    def get_trend_signals(self, limit: int = 10) -> List[dict]:
+        """
+        Holt Coins mit klarem Trend (für Trend-Following).
+        """
+        futures_symbols = self._get_futures_symbols()
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        response = self.session.get(url)
+
+        if response.status_code != 200:
+            return []
+
+        tickers = response.json()
+        signals = []
+
+        for t in tickers:
+            symbol = t.get("symbol", "")
+            if not symbol.endswith("USDT"):
+                continue
+            if symbol not in futures_symbols:
+                continue
+
+            volume = float(t.get("quoteVolume", 0))
+            if volume < config.MIN_VOLUME_USDT:
+                continue
+
+            base = symbol.replace("USDT", "")
+            if base in ["USDC", "BUSD", "DAI", "TUSD", "FDUSD"]:
+                continue
+
+            change_24h = float(t.get("priceChangePercent", 0))
+
+            # Nur Coins mit signifikanter Bewegung prüfen
+            if abs(change_24h) >= 3.0:
+                trend = self.check_trend_consistency(symbol)
+                if trend != "CHOPPY":
+                    signals.append({
+                        "symbol": symbol,
+                        "base": base,
+                        "price": float(t.get("lastPrice", 0)),
+                        "change_percent": change_24h,
+                        "volume_usdt": volume,
+                        "trend": trend,
+                    })
+
+        # Sortiere nach Stärke der Bewegung
+        return sorted(signals, key=lambda x: abs(x["change_percent"]), reverse=True)[:limit]
+
     def show_status(self):
         """Zeigt aktuellen Status"""
         print(f"\n{'='*60}")
@@ -580,8 +703,12 @@ def run_testnet_auto_trading():
     print(f"{'='*70}")
     print(f"  Mode: {'TESTNET' if config.USE_TESTNET else '⚠️ LIVE!'}")
     print(f"  Position Size: ${config.MAX_POSITION_SIZE}")
-    print(f"  LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
-    print(f"  SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
+    print(f"  Trend-Filter: {'✅ AN' if config.USE_TREND_FILTER else '❌ AUS'}")
+    if config.USE_TREND_FILTER:
+        print(f"  Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
+    print(f"  Mean Reversion:")
+    print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
+    print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
     print(f"  Scan Interval: {config.SCAN_INTERVAL_SECONDS}s")
     print(f"{'='*70}")
     print("  [Strg+C zum Beenden]\n")
@@ -595,27 +722,72 @@ def run_testnet_auto_trading():
             # 1. TP/SL prüfen
             trader.check_positions_tp_sl()
 
-            # 2. Neue LONG Signale (Buy the Dip) - FUTURES
-            if len([p for p in trader.positions.values() if p.side == "LONG"]) < 2:
+            # Zähle offene Positionen
+            long_count = len([p for p in trader.positions.values() if p.side == "LONG"])
+            short_count = len([p for p in trader.positions.values() if p.side == "SHORT"])
+
+            # 2. TREND-FOLLOWING (wenn aktiviert)
+            if config.USE_TREND_FILTER and (long_count < 2 or short_count < 2):
+                print(f"\n[{timestamp}] 🔍 Suche Trend-Signale...")
+                trend_signals = trader.get_trend_signals(5)
+
+                for coin in trend_signals:
+                    if coin["trend"] == "UP" and long_count < 2:
+                        key = f"{coin['symbol']}_LONG"
+                        if key not in trader.positions:
+                            print(f"\n[{timestamp}] 📈 TREND LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage UP)")
+                            result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
+                            if result:
+                                long_count += 1
+                                break
+
+                    elif coin["trend"] == "DOWN" and short_count < 2:
+                        key = f"{coin['symbol']}_SHORT"
+                        if key not in trader.positions:
+                            print(f"\n[{timestamp}] 📉 TREND SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage DOWN)")
+                            result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
+                            if result:
+                                short_count += 1
+                                break
+
+            # 3. MEAN REVERSION (Fallback wenn keine Trend-Signale)
+            # Nur wenn Trend-Filter aus ist ODER keine Trend-Signale gefunden wurden
+
+            # LONG: Buy the Dip
+            if long_count < 2:
                 losers = trader.get_top_losers(5)
                 for coin in losers:
                     key = f"{coin['symbol']}_LONG"
                     if key not in trader.positions:
-                        print(f"\n[{timestamp}] 📉 LONG SIGNAL: {coin['base']} @ {coin['change_percent']:.1f}%")
+                        # Bei aktivem Trend-Filter: Prüfe ob NICHT im Downtrend
+                        if config.USE_TREND_FILTER:
+                            trend = trader.check_trend_consistency(coin["symbol"])
+                            if trend == "DOWN":
+                                print(f"  ⏭️  Skip {coin['base']} - im Downtrend (kein Mean Reversion)")
+                                continue
+
+                        print(f"\n[{timestamp}] 📉 MEAN REV LONG: {coin['base']} @ {coin['change_percent']:.1f}%")
                         result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                         if result:
-                            break  # Nur einen Trade pro Runde
+                            break
 
-            # 3. Neue SHORT Signale (Fade the Pump) - FUTURES
-            if len([p for p in trader.positions.values() if p.side == "SHORT"]) < 2:
+            # SHORT: Fade the Pump
+            if short_count < 2:
                 gainers = trader.get_top_gainers(5)
                 for coin in gainers:
                     key = f"{coin['symbol']}_SHORT"
                     if key not in trader.positions:
-                        print(f"\n[{timestamp}] 📈 SHORT SIGNAL: {coin['base']} @ +{coin['change_percent']:.1f}%")
+                        # Bei aktivem Trend-Filter: Prüfe ob NICHT im Uptrend
+                        if config.USE_TREND_FILTER:
+                            trend = trader.check_trend_consistency(coin["symbol"])
+                            if trend == "UP":
+                                print(f"  ⏭️  Skip {coin['base']} - im Uptrend (kein Mean Reversion)")
+                                continue
+
+                        print(f"\n[{timestamp}] 📈 MEAN REV SHORT: {coin['base']} @ +{coin['change_percent']:.1f}%")
                         result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
                         if result:
-                            break  # Nur einen Trade pro Runde
+                            break
 
             # 4. Status
             futures_bal = trader.get_futures_balance()
