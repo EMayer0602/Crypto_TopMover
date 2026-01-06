@@ -953,6 +953,13 @@ class BreakoutBacktester:
         print(f"\n{'='*60}")
         print("  BREAKOUT BACKTEST ERGEBNISSE")
         print(f"{'='*60}")
+
+        if "error" in stats:
+            print(f"  ❌ {stats['error']}")
+            print(f"  Tipp: Mehr Tage oder kürzeren Lookback wählen")
+            print(f"{'='*60}\n")
+            return
+
         print(f"  Total Trades:   {stats['total_trades']}")
         print(f"    LONG:         {stats['long_trades']} (PnL: ${stats['long_pnl']:+,.0f})")
         print(f"    SHORT:        {stats['short_trades']} (PnL: ${stats['short_pnl']:+,.0f})")
