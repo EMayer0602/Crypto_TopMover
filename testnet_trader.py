@@ -618,6 +618,85 @@ class BinanceTestnetTrader:
         else:
             return "CHOPPY"
 
+    def check_breakout(self, symbol: str) -> str:
+        """
+        Prüft ob aktueller Preis ein Breakout/Breakdown ist.
+        Returns: "BREAKOUT_UP", "BREAKOUT_DOWN", oder "NONE"
+        """
+        klines = self.get_klines(symbol, "1d", config.BREAKOUT_LOOKBACK_DAYS + 1)
+        if len(klines) < config.BREAKOUT_LOOKBACK_DAYS + 1:
+            return "NONE"
+
+        # Aktueller Preis (letzter Close)
+        current_price = klines[-1]["close"]
+
+        # High/Low der vorherigen Tage (ohne heute)
+        previous_days = klines[:-1]
+        highest_high = max(k["high"] for k in previous_days)
+        lowest_low = min(k["low"] for k in previous_days)
+
+        # Breakout-Schwellen
+        breakout_up_level = highest_high * (1 + config.BREAKOUT_MIN_PERCENT / 100)
+        breakout_down_level = lowest_low * (1 - config.BREAKOUT_MIN_PERCENT / 100)
+
+        # Debug
+        print(f"  🔍 {symbol}: Preis=${current_price:.4f} | "
+              f"High={highest_high:.4f} (+{config.BREAKOUT_MIN_PERCENT}%={breakout_up_level:.4f}) | "
+              f"Low={lowest_low:.4f} (-{config.BREAKOUT_MIN_PERCENT}%={breakout_down_level:.4f})")
+
+        if current_price >= breakout_up_level:
+            return "BREAKOUT_UP"
+        elif current_price <= breakout_down_level:
+            return "BREAKOUT_DOWN"
+        else:
+            return "NONE"
+
+    def get_breakout_signals(self, limit: int = 10) -> List[dict]:
+        """
+        Sucht Coins die gerade einen Breakout machen.
+        """
+        futures_symbols = self._get_futures_symbols()
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        response = self.session.get(url)
+
+        if response.status_code != 200:
+            return []
+
+        tickers = response.json()
+        signals = []
+
+        for t in tickers:
+            symbol = t.get("symbol", "")
+            if not symbol.endswith("USDT"):
+                continue
+            if symbol not in futures_symbols:
+                continue
+
+            volume = float(t.get("quoteVolume", 0))
+            if volume < config.MIN_VOLUME_USDT:
+                continue
+
+            base = symbol.replace("USDT", "")
+            if base in ["USDC", "BUSD", "DAI", "TUSD", "FDUSD"]:
+                continue
+
+            change_24h = float(t.get("priceChangePercent", 0))
+
+            # Nur Coins mit Bewegung prüfen
+            if abs(change_24h) >= 2.0:
+                breakout = self.check_breakout(symbol)
+                if breakout != "NONE":
+                    signals.append({
+                        "symbol": symbol,
+                        "base": base,
+                        "price": float(t.get("lastPrice", 0)),
+                        "change_percent": change_24h,
+                        "volume_usdt": volume,
+                        "breakout": breakout,
+                    })
+
+        return sorted(signals, key=lambda x: abs(x["change_percent"]), reverse=True)[:limit]
+
     def get_trend_signals(self, limit: int = 10) -> List[dict]:
         """
         Holt Coins mit klarem Trend (für Trend-Following).
@@ -703,9 +782,12 @@ def run_testnet_auto_trading():
     print(f"{'='*70}")
     print(f"  Mode: {'TESTNET' if config.USE_TESTNET else '⚠️ LIVE!'}")
     print(f"  Position Size: ${config.MAX_POSITION_SIZE}")
+    print(f"  Breakout-Detection: {'✅ AN' if config.USE_BREAKOUT_DETECTION else '❌ AUS'}")
+    if config.USE_BREAKOUT_DETECTION:
+        print(f"    Lookback: {config.BREAKOUT_LOOKBACK_DAYS} Tage | Min Breakout: {config.BREAKOUT_MIN_PERCENT}%")
     print(f"  Trend-Filter: {'✅ AN' if config.USE_TREND_FILTER else '❌ AUS'}")
     if config.USE_TREND_FILTER:
-        print(f"  Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
+        print(f"    Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
     print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
@@ -726,8 +808,32 @@ def run_testnet_auto_trading():
             long_count = len([p for p in trader.positions.values() if p.side == "LONG"])
             short_count = len([p for p in trader.positions.values() if p.side == "SHORT"])
 
-            # 2. TREND-FOLLOWING (wenn aktiviert)
-            if config.USE_TREND_FILTER and (long_count < 2 or short_count < 2):
+            # 2. BREAKOUT DETECTION (wenn aktiviert)
+            if config.USE_BREAKOUT_DETECTION and (long_count < 2 or short_count < 2):
+                print(f"\n[{timestamp}] 🔍 Suche Breakout-Signale...")
+                breakout_signals = trader.get_breakout_signals(5)
+
+                for coin in breakout_signals:
+                    if coin["breakout"] == "BREAKOUT_UP" and long_count < 2:
+                        key = f"{coin['symbol']}_LONG"
+                        if key not in trader.positions:
+                            print(f"\n[{timestamp}] 🚀 BREAKOUT LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (über {config.BREAKOUT_LOOKBACK_DAYS}-Tage High)")
+                            result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
+                            if result:
+                                long_count += 1
+                                break
+
+                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < 2:
+                        key = f"{coin['symbol']}_SHORT"
+                        if key not in trader.positions:
+                            print(f"\n[{timestamp}] 💥 BREAKOUT SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (unter {config.BREAKOUT_LOOKBACK_DAYS}-Tage Low)")
+                            result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
+                            if result:
+                                short_count += 1
+                                break
+
+            # 2b. TREND-FOLLOWING (Fallback wenn kein Breakout)
+            elif config.USE_TREND_FILTER and (long_count < 2 or short_count < 2):
                 print(f"\n[{timestamp}] 🔍 Suche Trend-Signale...")
                 trend_signals = trader.get_trend_signals(5)
 

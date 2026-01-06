@@ -56,6 +56,11 @@ TREND_MAX_PULLBACK = 2.0          # Max. erlaubte Gegenbewegung in % (sonst = ch
 TREND_MIN_MOVE = 5.0              # Min. Gesamtbewegung über 3 Tage für Trend
 USE_TREND_FILTER = True           # Trend-Filter aktivieren
 
+# Breakout Detection
+BREAKOUT_LOOKBACK_DAYS = 5        # Wie viele Tage zurück schauen für High/Low
+BREAKOUT_MIN_PERCENT = 2.0        # Min. Breakout über High/Low in %
+USE_BREAKOUT_DETECTION = True     # Breakout-Modus statt fester Trend
+
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen
 QUOTE_CURRENCY = "USDT"     # Nur Paare mit USDT handeln
