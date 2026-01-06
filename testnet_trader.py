@@ -646,6 +646,119 @@ class BinanceTestnetTrader:
 
         return atr_values
 
+    def calculate_kama(self, klines: List[dict], period: int = 10, fast: int = 2, slow: int = 30) -> dict:
+        """
+        Berechnet Kaufman Adaptive Moving Average (KAMA).
+        KAMA passt sich der Marktvolatilität an.
+        Returns: {"direction": "BULLISH"|"BEARISH"|"NEUTRAL", "value": float, "price": float}
+        """
+        if len(klines) < period + 1:
+            return {"direction": "NEUTRAL", "value": 0, "price": 0}
+
+        closes = [k["close"] for k in klines]
+
+        # Efficiency Ratio (ER) berechnen
+        # ER = Change / Volatility
+        # Change = |Close - Close[period ago]|
+        # Volatility = Sum of |Close - Close[1]| over period
+
+        kama_values = [None] * period
+        kama = closes[period - 1]  # Start mit SMA
+
+        fast_sc = 2 / (fast + 1)  # Fast smoothing constant
+        slow_sc = 2 / (slow + 1)  # Slow smoothing constant
+
+        for i in range(period, len(closes)):
+            # Change (Richtungsbewegung)
+            change = abs(closes[i] - closes[i - period])
+
+            # Volatility (Summe aller kleinen Bewegungen)
+            volatility = sum(abs(closes[j] - closes[j - 1]) for j in range(i - period + 1, i + 1))
+
+            # Efficiency Ratio
+            er = change / volatility if volatility != 0 else 0
+
+            # Smoothing Constant
+            sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+
+            # KAMA berechnen
+            kama = kama + sc * (closes[i] - kama)
+            kama_values.append(kama)
+
+        current_price = closes[-1]
+        current_kama = kama_values[-1] if kama_values[-1] is not None else current_price
+
+        # Direction bestimmen
+        if current_price > current_kama * 1.001:  # 0.1% über KAMA
+            direction = "BULLISH"
+        elif current_price < current_kama * 0.999:  # 0.1% unter KAMA
+            direction = "BEARISH"
+        else:
+            direction = "NEUTRAL"
+
+        return {
+            "direction": direction,
+            "value": current_kama,
+            "price": current_price
+        }
+
+    def calculate_jma(self, klines: List[dict], period: int = 7, phase: int = 50, power: int = 2) -> dict:
+        """
+        Berechnet Jurik Moving Average (JMA) - vereinfachte Version.
+        JMA ist sehr smooth mit wenig Lag.
+        Returns: {"direction": "BULLISH"|"BEARISH"|"NEUTRAL", "value": float, "price": float}
+        """
+        if len(klines) < period + 1:
+            return {"direction": "NEUTRAL", "value": 0, "price": 0}
+
+        closes = [k["close"] for k in klines]
+
+        # Vereinfachte JMA Implementierung (ähnlich zu T3 Moving Average)
+        # Nutzt mehrfach geglättete EMAs
+
+        # Phase adjustment (-100 to +100, default 50)
+        phase_ratio = (phase / 100 + 1.5) * 0.5
+        beta = 0.45 * (period - 1) / (0.45 * (period - 1) + 2)
+
+        # Initialisierung
+        e0 = closes[0]
+        e1 = closes[0]
+        e2 = closes[0]
+        jma = closes[0]
+
+        jma_values = []
+
+        for i, close in enumerate(closes):
+            # Erste Glättung
+            e0 = (1 - beta) * close + beta * e0
+            # Zweite Glättung
+            e1 = (close - e0) * (1 - beta) + beta * e1
+            # Dritte Glättung mit Phase
+            e2 = (e0 + phase_ratio * e1 - jma) * ((1 - beta) ** power) + (beta ** power) * e2
+            # JMA Wert
+            jma = jma + e2
+
+            jma_values.append(jma)
+
+        current_price = closes[-1]
+        current_jma = jma_values[-1]
+
+        # Trend durch Vergleich mit vorherigem JMA
+        prev_jma = jma_values[-2] if len(jma_values) > 1 else current_jma
+
+        if current_price > current_jma and current_jma > prev_jma:
+            direction = "BULLISH"
+        elif current_price < current_jma and current_jma < prev_jma:
+            direction = "BEARISH"
+        else:
+            direction = "NEUTRAL"
+
+        return {
+            "direction": direction,
+            "value": current_jma,
+            "price": current_price
+        }
+
     def calculate_supertrend(self, klines: List[dict], period: int = 10, multiplier: float = 3.0) -> dict:
         """
         Berechnet Supertrend Indikator.
@@ -729,7 +842,6 @@ class BinanceTestnetTrader:
         """
         Holt Supertrend für BTC auf Higher Timeframe.
         """
-        # Mehr Kerzen holen für genauere Berechnung
         limit = config.SUPERTREND_PERIOD * 3 + 10
         klines = self.get_klines(symbol, config.HTF_TIMEFRAME, limit)
 
@@ -742,15 +854,91 @@ class BinanceTestnetTrader:
             config.SUPERTREND_MULTIPLIER
         )
 
-        # Info-String für Logging
         if result["direction"] == "BULLISH":
-            result["info"] = f"BTC über ST (${result['value']:,.0f}) → Nur Longs"
+            result["info"] = f"ST: BULL (${result['value']:,.0f})"
         elif result["direction"] == "BEARISH":
-            result["info"] = f"BTC unter ST (${result['value']:,.0f}) → Nur Shorts"
+            result["info"] = f"ST: BEAR (${result['value']:,.0f})"
         else:
-            result["info"] = "Supertrend neutral"
+            result["info"] = "ST: NEUTRAL"
 
         return result
+
+    def get_htf_consensus(self, symbol: str = "BTCUSDT") -> dict:
+        """
+        Berechnet alle 3 HTF-Indikatoren und gibt Konsens zurück.
+        2 von 3 müssen übereinstimmen für klares Signal.
+        """
+        limit = 50  # Genug Daten für alle Indikatoren
+        klines = self.get_klines(symbol, config.HTF_TIMEFRAME, limit)
+
+        if len(klines) < 15:
+            return {
+                "direction": "NEUTRAL",
+                "consensus": 0,
+                "supertrend": "NEUTRAL",
+                "kama": "NEUTRAL",
+                "jma": "NEUTRAL",
+                "info": "Nicht genug Daten"
+            }
+
+        # Alle 3 Indikatoren berechnen
+        st = self.calculate_supertrend(klines, config.SUPERTREND_PERIOD, config.SUPERTREND_MULTIPLIER)
+        kama = self.calculate_kama(klines, period=10)
+        jma = self.calculate_jma(klines, period=7)
+
+        # Votes zählen
+        bullish_votes = 0
+        bearish_votes = 0
+
+        indicators = {
+            "supertrend": st["direction"],
+            "kama": kama["direction"],
+            "jma": jma["direction"]
+        }
+
+        for name, direction in indicators.items():
+            if direction == "BULLISH":
+                bullish_votes += 1
+            elif direction == "BEARISH":
+                bearish_votes += 1
+
+        # Konsens bestimmen (2 von 3)
+        if bullish_votes >= 2:
+            consensus_direction = "BULLISH"
+            consensus = bullish_votes
+        elif bearish_votes >= 2:
+            consensus_direction = "BEARISH"
+            consensus = bearish_votes
+        else:
+            consensus_direction = "NEUTRAL"
+            consensus = 0
+
+        # Info-String bauen
+        st_emoji = "🟢" if st["direction"] == "BULLISH" else "🔴" if st["direction"] == "BEARISH" else "⚪"
+        kama_emoji = "🟢" if kama["direction"] == "BULLISH" else "🔴" if kama["direction"] == "BEARISH" else "⚪"
+        jma_emoji = "🟢" if jma["direction"] == "BULLISH" else "🔴" if jma["direction"] == "BEARISH" else "⚪"
+
+        info = f"ST{st_emoji} KAMA{kama_emoji} JMA{jma_emoji}"
+
+        if consensus_direction == "BULLISH":
+            info += f" → {consensus}/3 BULLISH → Nur Longs"
+        elif consensus_direction == "BEARISH":
+            info += f" → {consensus}/3 BEARISH → Nur Shorts"
+        else:
+            info += " → Kein Konsens → Beide OK"
+
+        return {
+            "direction": consensus_direction,
+            "consensus": consensus,
+            "supertrend": st["direction"],
+            "kama": kama["direction"],
+            "jma": jma["direction"],
+            "st_value": st["value"],
+            "kama_value": kama["value"],
+            "jma_value": jma["value"],
+            "price": klines[-1]["close"],
+            "info": info
+        }
 
     def get_market_trend(self) -> dict:
         """
@@ -783,24 +971,24 @@ class BinanceTestnetTrader:
     def is_trade_allowed_by_market(self, trade_side: str) -> tuple:
         """
         Prüft ob Trade-Richtung vom Markt erlaubt ist.
-        Nutzt HTF Supertrend wenn aktiviert, sonst einfachen BTC/ETH Filter.
+        Nutzt HTF Consensus (Supertrend + KAMA + JMA) wenn aktiviert.
         """
-        # HTF Supertrend Filter (bevorzugt)
+        # HTF Consensus Filter (alle 3 Indikatoren)
         if config.USE_HTF_SUPERTREND:
-            st = self.get_htf_supertrend("BTCUSDT")
+            consensus = self.get_htf_consensus("BTCUSDT")
 
-            if st["direction"] == "BULLISH":
+            if consensus["direction"] == "BULLISH":
                 if trade_side == "SHORT":
-                    return (False, f"{st['info']}")
-                return (True, f"{st['info']}")
+                    return (False, consensus["info"])
+                return (True, consensus["info"])
 
-            elif st["direction"] == "BEARISH":
+            elif consensus["direction"] == "BEARISH":
                 if trade_side == "LONG":
-                    return (False, f"{st['info']}")
-                return (True, f"{st['info']}")
+                    return (False, consensus["info"])
+                return (True, consensus["info"])
 
-            else:  # NEUTRAL
-                return (True, "Supertrend neutral - beide Richtungen")
+            else:  # NEUTRAL - kein Konsens
+                return (True, consensus["info"])
 
         # Legacy BTC/ETH Filter
         if config.USE_BTC_MARKET_FILTER:
@@ -991,9 +1179,9 @@ def run_testnet_auto_trading():
     print(f"  Trend-Filter: {'✅ AN' if config.USE_TREND_FILTER else '❌ AUS'}")
     if config.USE_TREND_FILTER:
         print(f"    Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
-    print(f"  HTF Supertrend: {'✅ AN' if config.USE_HTF_SUPERTREND else '❌ AUS'}")
+    print(f"  HTF Consensus Filter: {'✅ AN' if config.USE_HTF_SUPERTREND else '❌ AUS'}")
     if config.USE_HTF_SUPERTREND:
-        print(f"    BTC {config.HTF_TIMEFRAME} | Period: {config.SUPERTREND_PERIOD} | Mult: {config.SUPERTREND_MULTIPLIER}")
+        print(f"    BTC {config.HTF_TIMEFRAME} | Supertrend + KAMA + JMA (2/3 Konsens)")
     print(f"  BTC/ETH 24h-Filter: {'✅ AN' if config.USE_BTC_MARKET_FILTER else '❌ AUS'}")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
@@ -1020,8 +1208,8 @@ def run_testnet_auto_trading():
             short_allowed, short_reason = trader.is_trade_allowed_by_market("SHORT")
 
             if config.USE_HTF_SUPERTREND:
-                st = trader.get_htf_supertrend("BTCUSDT")
-                print(f"\n[{timestamp}] 📊 BTC Supertrend {config.HTF_TIMEFRAME}: {st['direction']} (ST=${st['value']:,.0f} | Preis=${st['price']:,.0f})")
+                consensus = trader.get_htf_consensus("BTCUSDT")
+                print(f"\n[{timestamp}] 📊 HTF {config.HTF_TIMEFRAME}: {consensus['info']}")
             else:
                 market = trader.get_market_trend()
                 print(f"\n[{timestamp}] 📊 Markt: BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%")

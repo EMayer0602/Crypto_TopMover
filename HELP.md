@@ -61,29 +61,41 @@ SHORT_GAINER_THRESHOLD = 25.0
 
 ---
 
-## HTF Supertrend Filter (Empfohlen)
+## HTF Consensus Filter (3 Indikatoren)
 
-Nutzt den **Supertrend Indikator** auf BTC 4h als Markt-Richtungsfilter.
-Robuster als einfacher 24h-Change, da Supertrend Volatilität berücksichtigt.
+Nutzt **3 verschiedene Trend-Indikatoren** auf BTC 4h und handelt nur bei Konsens (2 von 3).
+
+**Die 3 Indikatoren:**
+| Indikator | Beschreibung |
+|-----------|--------------|
+| **Supertrend** | ATR-basiert, klare Levels, reagiert auf Volatilität |
+| **KAMA** | Kaufman Adaptive MA, passt Smoothing an Marktlage an |
+| **JMA** | Jurik MA, sehr smooth mit minimalem Lag |
 
 **Logik:**
 ```
-BTC Preis > Supertrend  → BULLISH  → Nur Longs erlaubt
-BTC Preis < Supertrend  → BEARISH  → Nur Shorts erlaubt
+2/3 BULLISH  → Nur Longs erlaubt
+2/3 BEARISH  → Nur Shorts erlaubt
+Kein Konsens → Beide Richtungen erlaubt
 ```
 
 **Config:**
 ```python
-USE_HTF_SUPERTREND = True       # Supertrend Filter aktivieren
+USE_HTF_SUPERTREND = True       # Consensus Filter aktivieren
 HTF_TIMEFRAME = "4h"            # Timeframe (1h, 4h, 1d)
-SUPERTREND_PERIOD = 10          # ATR Periode
+SUPERTREND_PERIOD = 10          # ATR Periode für Supertrend
 SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
 ```
 
-**Vorteile gegenüber 24h-Change:**
-- Reagiert auf echte Trendwechsel, nicht nur auf Volatilität
-- Weniger Fehlsignale bei seitwärts-bewegenden Märkten
-- Berücksichtigt Average True Range (ATR) für Volatilität
+**Output-Beispiel:**
+```
+[12:30:45] 📊 HTF 4h: ST🟢 KAMA🟢 JMA🔴 → 2/3 BULLISH → Nur Longs
+```
+
+**Vorteile:**
+- 3 verschiedene Berechnungsmethoden = robustere Signale
+- Weniger Fehlsignale durch Konsens-Anforderung
+- Kombiniert Stärken aller 3 Indikatoren
 
 ---
 
@@ -176,20 +188,24 @@ Der Bot prüft in dieser Reihenfolge:
 
 ## Tipps
 
-1. **BTC unter Supertrend?**
+1. **2/3 Indikatoren BEARISH?**
    → Nur Shorts werden geöffnet, keine neuen Longs
 
-2. **BTC über Supertrend?**
+2. **2/3 Indikatoren BULLISH?**
    → Nur Longs werden geöffnet, keine neuen Shorts
 
-3. **Viele Breakouts?**
+3. **Kein Konsens (z.B. 1 BULL, 1 BEAR, 1 NEUTRAL)?**
+   → Beide Richtungen erlaubt - Markt ist unentschlossen
+
+4. **Viele Breakouts?**
    → Bot tradet mit dem Momentum
 
-4. **Seitwärtsmarkt?**
+5. **Seitwärtsmarkt?**
    → Mean Reversion funktioniert am besten
 
-5. **Performance schlecht?**
+6. **Performance schlecht?**
    → `python auto_optimize.py` laufen lassen
 
-6. **Supertrend zu sensibel?**
+7. **Filter zu sensibel?**
    → SUPERTREND_MULTIPLIER erhöhen (z.B. 3.5 oder 4.0)
+   → HTF_TIMEFRAME auf "1d" setzen für langsamere Signale
