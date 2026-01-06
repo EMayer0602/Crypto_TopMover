@@ -618,93 +618,208 @@ class BinanceTestnetTrader:
         else:
             return "CHOPPY"
 
+    def calculate_atr(self, klines: List[dict], period: int = 10) -> List[float]:
+        """
+        Berechnet Average True Range (ATR).
+        """
+        if len(klines) < period + 1:
+            return []
+
+        tr_values = []
+        for i in range(1, len(klines)):
+            high = klines[i]["high"]
+            low = klines[i]["low"]
+            prev_close = klines[i-1]["close"]
+
+            # True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            tr_values.append(tr)
+
+        # ATR als Simple Moving Average der TR-Werte
+        atr_values = []
+        for i in range(len(tr_values)):
+            if i < period - 1:
+                atr_values.append(None)
+            else:
+                atr = sum(tr_values[i-period+1:i+1]) / period
+                atr_values.append(atr)
+
+        return atr_values
+
+    def calculate_supertrend(self, klines: List[dict], period: int = 10, multiplier: float = 3.0) -> dict:
+        """
+        Berechnet Supertrend Indikator.
+        Returns: {"direction": "BULLISH"|"BEARISH", "value": float, "price": float}
+        """
+        if len(klines) < period + 2:
+            return {"direction": "NEUTRAL", "value": 0, "price": 0}
+
+        atr_values = self.calculate_atr(klines, period)
+        if not atr_values or atr_values[-1] is None:
+            return {"direction": "NEUTRAL", "value": 0, "price": 0}
+
+        # Supertrend Berechnung
+        supertrend_up = []
+        supertrend_down = []
+        supertrend = []
+        direction = []
+
+        for i in range(len(klines)):
+            if i < period:
+                supertrend_up.append(None)
+                supertrend_down.append(None)
+                supertrend.append(None)
+                direction.append(1)  # Default bullish
+                continue
+
+            atr = atr_values[i-1] if i > 0 and atr_values[i-1] is not None else 0
+            hl2 = (klines[i]["high"] + klines[i]["low"]) / 2
+
+            # Basic Upper und Lower Band
+            basic_upper = hl2 + (multiplier * atr)
+            basic_lower = hl2 - (multiplier * atr)
+
+            # Final Upper Band
+            prev_upper = supertrend_up[i-1] if supertrend_up[i-1] is not None else basic_upper
+            if basic_upper < prev_upper or klines[i-1]["close"] > prev_upper:
+                final_upper = basic_upper
+            else:
+                final_upper = prev_upper
+
+            # Final Lower Band
+            prev_lower = supertrend_down[i-1] if supertrend_down[i-1] is not None else basic_lower
+            if basic_lower > prev_lower or klines[i-1]["close"] < prev_lower:
+                final_lower = basic_lower
+            else:
+                final_lower = prev_lower
+
+            supertrend_up.append(final_upper)
+            supertrend_down.append(final_lower)
+
+            # Direction
+            prev_dir = direction[i-1]
+            prev_st = supertrend[i-1] if supertrend[i-1] is not None else final_lower
+
+            if prev_dir == 1:  # War bullish
+                if klines[i]["close"] < final_lower:
+                    direction.append(-1)  # Wechsel zu bearish
+                    supertrend.append(final_upper)
+                else:
+                    direction.append(1)
+                    supertrend.append(final_lower)
+            else:  # War bearish
+                if klines[i]["close"] > final_upper:
+                    direction.append(1)  # Wechsel zu bullish
+                    supertrend.append(final_lower)
+                else:
+                    direction.append(-1)
+                    supertrend.append(final_upper)
+
+        current_price = klines[-1]["close"]
+        current_direction = "BULLISH" if direction[-1] == 1 else "BEARISH"
+        current_st_value = supertrend[-1] if supertrend[-1] is not None else 0
+
+        return {
+            "direction": current_direction,
+            "value": current_st_value,
+            "price": current_price
+        }
+
+    def get_htf_supertrend(self, symbol: str = "BTCUSDT") -> dict:
+        """
+        Holt Supertrend für BTC auf Higher Timeframe.
+        """
+        # Mehr Kerzen holen für genauere Berechnung
+        limit = config.SUPERTREND_PERIOD * 3 + 10
+        klines = self.get_klines(symbol, config.HTF_TIMEFRAME, limit)
+
+        if len(klines) < config.SUPERTREND_PERIOD + 2:
+            return {"direction": "NEUTRAL", "value": 0, "price": 0, "info": "Nicht genug Daten"}
+
+        result = self.calculate_supertrend(
+            klines,
+            config.SUPERTREND_PERIOD,
+            config.SUPERTREND_MULTIPLIER
+        )
+
+        # Info-String für Logging
+        if result["direction"] == "BULLISH":
+            result["info"] = f"BTC über ST (${result['value']:,.0f}) → Nur Longs"
+        elif result["direction"] == "BEARISH":
+            result["info"] = f"BTC unter ST (${result['value']:,.0f}) → Nur Shorts"
+        else:
+            result["info"] = "Supertrend neutral"
+
+        return result
+
     def get_market_trend(self) -> dict:
         """
-        Prüft BTC + ETH als kombinierte Markt-Indikatoren.
-        Returns: {"direction": "BULLISH"|"BEARISH"|"NEUTRAL",
-                  "btc_change": float, "eth_change": float, "avg_change": float}
+        Prüft BTC + ETH als kombinierte Markt-Indikatoren (Legacy).
         """
         url = "https://api.binance.com/api/v3/ticker/24hr"
-
-        # BTC abrufen
         btc_response = self.session.get(url, params={"symbol": "BTCUSDT"})
-        btc_change = 0.0
-        if btc_response.status_code == 200:
-            btc_change = float(btc_response.json().get("priceChangePercent", 0))
-
-        # ETH abrufen
+        btc_change = float(btc_response.json().get("priceChangePercent", 0)) if btc_response.status_code == 200 else 0.0
         eth_response = self.session.get(url, params={"symbol": "ETHUSDT"})
-        eth_change = 0.0
-        if eth_response.status_code == 200:
-            eth_change = float(eth_response.json().get("priceChangePercent", 0))
+        eth_change = float(eth_response.json().get("priceChangePercent", 0)) if eth_response.status_code == 200 else 0.0
 
-        # Durchschnitt (BTC gewichtet stärker: 60/40)
-        avg_change = (btc_change * 0.6) + (eth_change * 0.4)
-
-        # Richtung bestimmen - beide müssen in dieselbe Richtung zeigen für klares Signal
-        btc_bullish = btc_change >= config.BTC_TREND_THRESHOLD
         btc_bearish = btc_change <= -config.BTC_TREND_THRESHOLD
-        eth_bullish = eth_change >= config.BTC_TREND_THRESHOLD
         eth_bearish = eth_change <= -config.BTC_TREND_THRESHOLD
+        btc_bullish = btc_change >= config.BTC_TREND_THRESHOLD
+        eth_bullish = eth_change >= config.BTC_TREND_THRESHOLD
 
         if btc_bearish and eth_bearish:
             direction = "BEARISH"
         elif btc_bullish and eth_bullish:
             direction = "BULLISH"
         elif btc_bearish or eth_bearish:
-            # Einer fällt stark - vorsichtig sein mit Longs
             direction = "WEAK_BEARISH"
         elif btc_bullish or eth_bullish:
-            # Einer steigt stark - vorsichtig sein mit Shorts
             direction = "WEAK_BULLISH"
         else:
             direction = "NEUTRAL"
 
-        return {
-            "direction": direction,
-            "btc_change": btc_change,
-            "eth_change": eth_change,
-            "avg_change": avg_change
-        }
+        return {"direction": direction, "btc_change": btc_change, "eth_change": eth_change}
 
     def is_trade_allowed_by_market(self, trade_side: str) -> tuple:
         """
         Prüft ob Trade-Richtung vom Markt erlaubt ist.
-        trade_side: "LONG" oder "SHORT"
-        Returns: (allowed: bool, reason: str)
+        Nutzt HTF Supertrend wenn aktiviert, sonst einfachen BTC/ETH Filter.
         """
-        if not config.USE_BTC_MARKET_FILTER:
-            return (True, "Filter deaktiviert")
+        # HTF Supertrend Filter (bevorzugt)
+        if config.USE_HTF_SUPERTREND:
+            st = self.get_htf_supertrend("BTCUSDT")
 
-        market = self.get_market_trend()
-        info = f"BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%"
+            if st["direction"] == "BULLISH":
+                if trade_side == "SHORT":
+                    return (False, f"{st['info']}")
+                return (True, f"{st['info']}")
 
-        if market["direction"] == "BEARISH":
-            if trade_side == "LONG":
-                return (False, f"{info} - keine Longs bei Gewinnmitnahmen")
-            else:
-                return (True, f"{info} - Shorts erlaubt")
+            elif st["direction"] == "BEARISH":
+                if trade_side == "LONG":
+                    return (False, f"{st['info']}")
+                return (True, f"{st['info']}")
 
-        elif market["direction"] == "WEAK_BEARISH":
-            if trade_side == "LONG":
-                return (False, f"{info} - Markt schwächelt, keine Longs")
-            else:
-                return (True, f"{info} - Shorts erlaubt")
+            else:  # NEUTRAL
+                return (True, "Supertrend neutral - beide Richtungen")
 
-        elif market["direction"] == "BULLISH":
-            if trade_side == "SHORT":
-                return (False, f"{info} - keine Shorts im Bullenmarkt")
-            else:
-                return (True, f"{info} - Longs erlaubt")
+        # Legacy BTC/ETH Filter
+        if config.USE_BTC_MARKET_FILTER:
+            market = self.get_market_trend()
+            info = f"BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%"
 
-        elif market["direction"] == "WEAK_BULLISH":
-            if trade_side == "SHORT":
-                return (False, f"{info} - Markt bullish, keine Shorts")
-            else:
-                return (True, f"{info} - Longs erlaubt")
+            if market["direction"] in ["BEARISH", "WEAK_BEARISH"]:
+                if trade_side == "LONG":
+                    return (False, f"{info} - keine Longs")
+                return (True, f"{info} - Shorts OK")
 
-        else:  # NEUTRAL
-            return (True, f"{info} - beide Richtungen erlaubt")
+            elif market["direction"] in ["BULLISH", "WEAK_BULLISH"]:
+                if trade_side == "SHORT":
+                    return (False, f"{info} - keine Shorts")
+                return (True, f"{info} - Longs OK")
+
+            return (True, f"{info} - beide OK")
+
+        return (True, "Markt-Filter deaktiviert")
 
     def check_breakout(self, symbol: str) -> str:
         """
@@ -876,9 +991,10 @@ def run_testnet_auto_trading():
     print(f"  Trend-Filter: {'✅ AN' if config.USE_TREND_FILTER else '❌ AUS'}")
     if config.USE_TREND_FILTER:
         print(f"    Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
-    print(f"  BTC/ETH Markt-Filter: {'✅ AN' if config.USE_BTC_MARKET_FILTER else '❌ AUS'}")
-    if config.USE_BTC_MARKET_FILTER:
-        print(f"    Threshold: +/-{config.BTC_TREND_THRESHOLD}%")
+    print(f"  HTF Supertrend: {'✅ AN' if config.USE_HTF_SUPERTREND else '❌ AUS'}")
+    if config.USE_HTF_SUPERTREND:
+        print(f"    BTC {config.HTF_TIMEFRAME} | Period: {config.SUPERTREND_PERIOD} | Mult: {config.SUPERTREND_MULTIPLIER}")
+    print(f"  BTC/ETH 24h-Filter: {'✅ AN' if config.USE_BTC_MARKET_FILTER else '❌ AUS'}")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
     print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
@@ -899,13 +1015,17 @@ def run_testnet_auto_trading():
             long_count = len([p for p in trader.positions.values() if p.side == "LONG"])
             short_count = len([p for p in trader.positions.values() if p.side == "SHORT"])
 
-            # 2. Markt-Check (BTC + ETH)
-            market = trader.get_market_trend()
-            market_info = f"BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%"
+            # 2. Markt-Check (HTF Supertrend oder BTC/ETH)
             long_allowed, long_reason = trader.is_trade_allowed_by_market("LONG")
             short_allowed, short_reason = trader.is_trade_allowed_by_market("SHORT")
 
-            print(f"\n[{timestamp}] 📊 Markt: {market_info} → {market['direction']}")
+            if config.USE_HTF_SUPERTREND:
+                st = trader.get_htf_supertrend("BTCUSDT")
+                print(f"\n[{timestamp}] 📊 BTC Supertrend {config.HTF_TIMEFRAME}: {st['direction']} (ST=${st['value']:,.0f} | Preis=${st['price']:,.0f})")
+            else:
+                market = trader.get_market_trend()
+                print(f"\n[{timestamp}] 📊 Markt: BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%")
+
             if not long_allowed:
                 print(f"  ⛔ Keine Longs: {long_reason}")
             if not short_allowed:

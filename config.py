@@ -62,9 +62,15 @@ BREAKOUT_MIN_PERCENT = 2.0        # Min. Breakout über High/Low in %
 USE_BREAKOUT_DETECTION = True     # Breakout-Modus statt fester Trend
 
 # BTC Markt-Filter (verhindert Trades gegen den Gesamtmarkt)
-USE_BTC_MARKET_FILTER = True      # BTC als Markt-Indikator nutzen
+USE_BTC_MARKET_FILTER = False     # Einfacher 24h-Change Filter (veraltet)
 BTC_TREND_THRESHOLD = 3.0         # Ab +/-3% 24h gilt BTC als trending
 BTC_TREND_TIMEFRAME = "24h"       # Timeframe für BTC-Check (1h, 4h, 24h)
+
+# HTF Supertrend Filter (BTC als Markt-Indikator)
+USE_HTF_SUPERTREND = True         # Supertrend auf BTC 4h als Markt-Filter
+HTF_TIMEFRAME = "4h"              # Timeframe für Supertrend (1h, 4h, 1d)
+SUPERTREND_PERIOD = 10            # ATR Periode
+SUPERTREND_MULTIPLIER = 3.0       # ATR Multiplikator
 
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen

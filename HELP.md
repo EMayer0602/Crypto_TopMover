@@ -61,33 +61,46 @@ SHORT_GAINER_THRESHOLD = 25.0
 
 ---
 
-## BTC/ETH Markt-Filter (NEU)
+## HTF Supertrend Filter (Empfohlen)
 
-Verhindert Trades gegen den Gesamtmarkt.
+Nutzt den **Supertrend Indikator** auf BTC 4h als Markt-Richtungsfilter.
+Robuster als einfacher 24h-Change, da Supertrend Volatilität berücksichtigt.
 
 **Logik:**
 ```
-BTC + ETH beide < -3%  → BEARISH  → Nur Shorts erlaubt
-BTC + ETH beide > +3%  → BULLISH  → Nur Longs erlaubt
-Einer fällt stark      → WEAK_BEARISH → Keine neuen Longs
-Einer steigt stark     → WEAK_BULLISH → Keine neuen Shorts
-Beide neutral          → NEUTRAL  → Beide Richtungen erlaubt
+BTC Preis > Supertrend  → BULLISH  → Nur Longs erlaubt
+BTC Preis < Supertrend  → BEARISH  → Nur Shorts erlaubt
 ```
 
 **Config:**
 ```python
-USE_BTC_MARKET_FILTER = True
-BTC_TREND_THRESHOLD = 3.0     # Ab +/-3% gilt als trending
+USE_HTF_SUPERTREND = True       # Supertrend Filter aktivieren
+HTF_TIMEFRAME = "4h"            # Timeframe (1h, 4h, 1d)
+SUPERTREND_PERIOD = 10          # ATR Periode
+SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
 ```
 
-**Beispiel-Szenarien:**
+**Vorteile gegenüber 24h-Change:**
+- Reagiert auf echte Trendwechsel, nicht nur auf Volatilität
+- Weniger Fehlsignale bei seitwärts-bewegenden Märkten
+- Berücksichtigt Average True Range (ATR) für Volatilität
+
+---
+
+## BTC/ETH 24h-Filter (Legacy)
+
+Einfacher Filter basierend auf 24h-Preisänderung.
+
+**Config:**
+```python
+USE_BTC_MARKET_FILTER = True    # (Nur wenn USE_HTF_SUPERTREND = False)
+BTC_TREND_THRESHOLD = 3.0       # Ab +/-3% gilt als trending
+```
 
 | BTC 24h | ETH 24h | Markt-Status | Longs | Shorts |
 |---------|---------|--------------|-------|--------|
 | -5%     | -4%     | BEARISH      | ❌    | ✅     |
 | +4%     | +3%     | BULLISH      | ✅    | ❌     |
-| -4%     | +1%     | WEAK_BEARISH | ❌    | ✅     |
-| +1%     | +5%     | WEAK_BULLISH | ✅    | ❌     |
 | +1%     | -1%     | NEUTRAL      | ✅    | ✅     |
 
 ---
@@ -136,7 +149,7 @@ python backtester.py
 
 Der Bot prüft in dieser Reihenfolge:
 
-1. **Markt-Filter:** BTC/ETH erlaubt diese Richtung?
+1. **HTF Supertrend:** BTC über/unter Supertrend? → Bestimmt erlaubte Richtung
 2. **Breakout:** Gibt es frische Breakouts?
 3. **Trend:** Gibt es etablierte Trends?
 4. **Mean Reversion:** Extreme Moves zum Faden?
@@ -154,20 +167,29 @@ Der Bot prüft in dieser Reihenfolge:
 | `SHORT_STOP_LOSS` | 8.0 | SL für Shorts |
 | `USE_BREAKOUT_DETECTION` | True | Breakout-Modus |
 | `USE_TREND_FILTER` | True | Trend-Following |
-| `USE_BTC_MARKET_FILTER` | True | BTC/ETH Filter |
+| `USE_HTF_SUPERTREND` | True | BTC Supertrend Filter |
+| `HTF_TIMEFRAME` | "4h" | Supertrend Timeframe |
+| `SUPERTREND_PERIOD` | 10 | ATR Periode |
+| `SUPERTREND_MULTIPLIER` | 3.0 | ATR Multiplikator |
 
 ---
 
 ## Tipps
 
-1. **Markt fällt stark?**
+1. **BTC unter Supertrend?**
    → Nur Shorts werden geöffnet, keine neuen Longs
 
-2. **Viele Breakouts?**
+2. **BTC über Supertrend?**
+   → Nur Longs werden geöffnet, keine neuen Shorts
+
+3. **Viele Breakouts?**
    → Bot tradet mit dem Momentum
 
-3. **Seitwärtsmarkt?**
+4. **Seitwärtsmarkt?**
    → Mean Reversion funktioniert am besten
 
-4. **Performance schlecht?**
+5. **Performance schlecht?**
    → `python auto_optimize.py` laufen lassen
+
+6. **Supertrend zu sensibel?**
+   → SUPERTREND_MULTIPLIER erhöhen (z.B. 3.5 oder 4.0)
