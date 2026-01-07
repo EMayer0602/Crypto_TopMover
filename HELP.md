@@ -61,41 +61,64 @@ SHORT_GAINER_THRESHOLD = 25.0
 
 ---
 
-## HTF Consensus Filter (3 Indikatoren)
+## BTC Supertrend Filter (vereinfacht)
 
-Nutzt **3 verschiedene Trend-Indikatoren** auf BTC 4h und handelt nur bei Konsens (2 von 3).
-
-**Die 3 Indikatoren:**
-| Indikator | Beschreibung |
-|-----------|--------------|
-| **Supertrend** | ATR-basiert, klare Levels, reagiert auf Volatilität |
-| **KAMA** | Kaufman Adaptive MA, passt Smoothing an Marktlage an |
-| **JMA** | Jurik MA, sehr smooth mit minimalem Lag |
+Nutzt **nur BTC Supertrend** als Markt-Filter. Einfach und effektiv.
 
 **Logik:**
 ```
-2/3 BULLISH  → Nur Longs erlaubt
-2/3 BEARISH  → Nur Shorts erlaubt
-Kein Konsens → Beide Richtungen erlaubt
+BTC über Supertrend  → BULLISH → Nur Longs erlaubt
+BTC unter Supertrend → BEARISH → Nur Shorts erlaubt
 ```
 
 **Config:**
 ```python
-USE_HTF_SUPERTREND = True       # Consensus Filter aktivieren
+USE_HTF_SUPERTREND = True       # Supertrend Filter aktivieren
 HTF_TIMEFRAME = "4h"            # Timeframe (1h, 4h, 1d)
-SUPERTREND_PERIOD = 10          # ATR Periode für Supertrend
+SUPERTREND_PERIOD = 10          # ATR Periode
 SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
 ```
 
 **Output-Beispiel:**
 ```
-[12:30:45] 📊 HTF 4h: ST🟢 KAMA🟢 JMA🔴 → 2/3 BULLISH → Nur Longs
+[12:30:45] 📊 BTC 4h: 🟢 BULLISH @ $95,000 (ST: $92,500)
 ```
 
 **Vorteile:**
-- 3 verschiedene Berechnungsmethoden = robustere Signale
-- Weniger Fehlsignale durch Konsens-Anforderung
-- Kombiniert Stärken aller 3 Indikatoren
+- Einfach und klar
+- Weniger Konflikte durch nur 1 Indikator
+- Schnelle Reaktion auf Marktänderungen
+
+---
+
+## Trailing Stop
+
+Sichert Gewinne durch nachlaufenden Stop.
+
+**Logik:**
+```
+1. Position erreicht +2% Gewinn → Trailing Stop aktiviert
+2. Trailing Stop folgt dem Preis mit 1.5% Abstand
+3. Wenn Preis zurückfällt und Stop erreicht → Position geschlossen
+```
+
+**Config:**
+```python
+USE_TRAILING_STOP = True         # Trailing Stop aktivieren
+TRAILING_STOP_ACTIVATION = 2.0   # Ab +2% Gewinn aktiv
+TRAILING_STOP_DISTANCE = 1.5     # Folgt mit 1.5% Abstand
+```
+
+**Beispiel LONG:**
+```
+Entry: $100 → Preis steigt auf $105 (+5%)
+Peak: $105 → Trailing Stop bei $103.42 (1.5% unter Peak)
+Preis fällt auf $103 → 🔔 TRAILING STOP → Gewinn gesichert!
+```
+
+**Vorteile:**
+- Gewinne werden nicht zu früh mitgenommen
+- Verluste werden begrenzt sobald Position im Plus
 
 ---
 
@@ -177,6 +200,9 @@ Der Bot prüft in dieser Reihenfolge:
 | `STOP_LOSS_PERCENT` | 5.0 | SL für Longs |
 | `SHORT_TAKE_PROFIT` | 5.0 | TP für Shorts |
 | `SHORT_STOP_LOSS` | 8.0 | SL für Shorts |
+| `USE_TRAILING_STOP` | True | Trailing Stop aktivieren |
+| `TRAILING_STOP_ACTIVATION` | 2.0 | Ab +2% wird TS aktiv |
+| `TRAILING_STOP_DISTANCE` | 1.5 | TS folgt mit 1.5% Abstand |
 | `USE_BREAKOUT_DETECTION` | True | Breakout-Modus |
 | `USE_TREND_FILTER` | True | Trend-Following |
 | `USE_HTF_SUPERTREND` | True | BTC Supertrend Filter |
@@ -188,14 +214,14 @@ Der Bot prüft in dieser Reihenfolge:
 
 ## Tipps
 
-1. **2/3 Indikatoren BEARISH?**
+1. **BTC Supertrend BEARISH?**
    → Nur Shorts werden geöffnet, keine neuen Longs
 
-2. **2/3 Indikatoren BULLISH?**
+2. **BTC Supertrend BULLISH?**
    → Nur Longs werden geöffnet, keine neuen Shorts
 
-3. **Kein Konsens (z.B. 1 BULL, 1 BEAR, 1 NEUTRAL)?**
-   → Beide Richtungen erlaubt - Markt ist unentschlossen
+3. **Trailing Stop aktiv (TS)?**
+   → Position hat +2% erreicht, Stop folgt dem Peak
 
 4. **Viele Breakouts?**
    → Bot tradet mit dem Momentum
@@ -209,3 +235,6 @@ Der Bot prüft in dieser Reihenfolge:
 7. **Filter zu sensibel?**
    → SUPERTREND_MULTIPLIER erhöhen (z.B. 3.5 oder 4.0)
    → HTF_TIMEFRAME auf "1d" setzen für langsamere Signale
+
+8. **Trailing Stop zu eng?**
+   → TRAILING_STOP_DISTANCE erhöhen (z.B. 2.0 oder 2.5%)

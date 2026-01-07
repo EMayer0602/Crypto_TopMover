@@ -26,6 +26,7 @@ class TestnetPosition:
     quantity: float
     entry_time: str
     order_id: str
+    peak_price: float = 0.0  # Höchstpreis (LONG) / Tiefstpreis (SHORT) für Trailing Stop
 
 
 class BinanceTestnetTrader:
@@ -493,7 +494,7 @@ class BinanceTestnetTrader:
     # === AUTO TRADING ===
 
     def check_positions_tp_sl(self):
-        """Prüft Positionen auf TP/SL"""
+        """Prüft Positionen auf TP/SL mit Trailing Stop"""
         for key, pos in list(self.positions.items()):
             if pos.side == "LONG":
                 current_price = self._get_futures_price(pos.symbol)
@@ -503,6 +504,26 @@ class BinanceTestnetTrader:
 
                 pnl = (current_price - pos.entry_price) / pos.entry_price * 100
 
+                # Trailing Stop Logik für LONG
+                if config.USE_TRAILING_STOP and pnl >= config.TRAILING_STOP_ACTIVATION:
+                    # Peak-Preis aktualisieren
+                    if pos.peak_price == 0.0 or current_price > pos.peak_price:
+                        pos.peak_price = current_price
+                        self._save_state()
+
+                    # Trailing Stop Level berechnen
+                    trailing_stop_level = pos.peak_price * (1 - config.TRAILING_STOP_DISTANCE / 100)
+
+                    if current_price <= trailing_stop_level:
+                        pnl_at_close = (current_price - pos.entry_price) / pos.entry_price * 100
+                        print(f"🔔 TRAILING STOP für LONG {pos.symbol} ({pnl_at_close:+.2f}%)")
+                        print(f"   Peak: ${pos.peak_price:.4f} → Stop: ${trailing_stop_level:.4f} → Aktuell: ${current_price:.4f}")
+                        result = self.futures_close_long(pos.symbol)
+                        if not result:
+                            print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
+                        continue
+
+                # Normaler TP/SL
                 if pnl >= config.TAKE_PROFIT_PERCENT:
                     print(f"📈 TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
                     result = self.futures_close_long(pos.symbol)
@@ -523,6 +544,26 @@ class BinanceTestnetTrader:
                 # Bei SHORT: Gewinn wenn Preis fällt
                 pnl = (pos.entry_price - current_price) / pos.entry_price * 100
 
+                # Trailing Stop Logik für SHORT
+                if config.USE_TRAILING_STOP and pnl >= config.TRAILING_STOP_ACTIVATION:
+                    # Peak-Preis aktualisieren (für SHORT: niedrigster Preis)
+                    if pos.peak_price == 0.0 or current_price < pos.peak_price:
+                        pos.peak_price = current_price
+                        self._save_state()
+
+                    # Trailing Stop Level berechnen (für SHORT: Preis darf nicht zu stark steigen)
+                    trailing_stop_level = pos.peak_price * (1 + config.TRAILING_STOP_DISTANCE / 100)
+
+                    if current_price >= trailing_stop_level:
+                        pnl_at_close = (pos.entry_price - current_price) / pos.entry_price * 100
+                        print(f"🔔 TRAILING STOP für SHORT {pos.symbol} ({pnl_at_close:+.2f}%)")
+                        print(f"   Low: ${pos.peak_price:.4f} → Stop: ${trailing_stop_level:.4f} → Aktuell: ${current_price:.4f}")
+                        result = self.futures_close_short(pos.symbol)
+                        if not result:
+                            print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
+                        continue
+
+                # Normaler TP/SL
                 if pnl >= config.SHORT_TAKE_PROFIT:
                     print(f"📈 TP erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
                     result = self.futures_close_short(pos.symbol)
@@ -1025,40 +1066,23 @@ class BinanceTestnetTrader:
     def is_trade_allowed_by_market(self, trade_side: str) -> tuple:
         """
         Prüft ob Trade-Richtung vom Markt erlaubt ist.
-        Nutzt BTC + ETH Consensus (je 3 Indikatoren = 6 total).
+        VEREINFACHT: Nur BTC Supertrend (1 Indikator).
         """
-        # HTF Consensus Filter (BTC + ETH kombiniert)
+        # Einfacher BTC Supertrend Filter
         if config.USE_HTF_SUPERTREND:
-            market = self.get_market_consensus()
+            st = self.get_htf_supertrend("BTCUSDT")
 
-            # KONFLIKT = BTC und ETH widersprechen sich → Kein Trade
-            if market["direction"] == "KONFLIKT":
-                return (False, market["info"])
-
-            # STARK BULLISH/BEARISH = Beide stimmen überein
-            if market["direction"] == "BULLISH":
+            if st["direction"] == "BULLISH":
                 if trade_side == "SHORT":
-                    return (False, market["info"])
-                return (True, market["info"])
+                    return (False, f"BTC Supertrend BULL → Keine Shorts")
+                return (True, f"BTC Supertrend BULL → Longs OK")
 
-            elif market["direction"] == "BEARISH":
+            elif st["direction"] == "BEARISH":
                 if trade_side == "LONG":
-                    return (False, market["info"])
-                return (True, market["info"])
+                    return (False, f"BTC Supertrend BEAR → Keine Longs")
+                return (True, f"BTC Supertrend BEAR → Shorts OK")
 
-            # SCHWACH = Nur einer zeigt Richtung
-            elif market["direction"] == "WEAK_BULLISH":
-                if trade_side == "SHORT":
-                    return (False, market["info"])
-                return (True, market["info"])
-
-            elif market["direction"] == "WEAK_BEARISH":
-                if trade_side == "LONG":
-                    return (False, market["info"])
-                return (True, market["info"])
-
-            # NEUTRAL = Beide neutral
-            return (True, market["info"])
+            return (True, "BTC Supertrend NEUTRAL → Beide OK")
 
         # Legacy BTC/ETH Filter
         if config.USE_BTC_MARKET_FILTER:
@@ -1205,13 +1229,126 @@ class BinanceTestnetTrader:
         # Sortiere nach Stärke der Bewegung
         return sorted(signals, key=lambda x: abs(x["change_percent"]), reverse=True)[:limit]
 
+    def get_trading_stats(self) -> dict:
+        """Berechnet Trading-Statistiken"""
+        if not self.trade_history:
+            return {
+                "total_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "total_pnl": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
+                "best_trade": 0.0,
+                "worst_trade": 0.0,
+                "equity_curve": []
+            }
+
+        wins = [t for t in self.trade_history if t["pnl_percent"] > 0]
+        losses = [t for t in self.trade_history if t["pnl_percent"] <= 0]
+
+        total_pnl = sum(t["pnl_percent"] for t in self.trade_history)
+        avg_win = sum(t["pnl_percent"] for t in wins) / len(wins) if wins else 0.0
+        avg_loss = sum(t["pnl_percent"] for t in losses) / len(losses) if losses else 0.0
+        best_trade = max(t["pnl_percent"] for t in self.trade_history) if self.trade_history else 0.0
+        worst_trade = min(t["pnl_percent"] for t in self.trade_history) if self.trade_history else 0.0
+
+        # Equity Curve berechnen (kumulative PnL)
+        equity_curve = []
+        cumulative = 0.0
+        for t in self.trade_history:
+            cumulative += t["pnl_percent"]
+            equity_curve.append(cumulative)
+
+        return {
+            "total_trades": len(self.trade_history),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": len(wins) / len(self.trade_history) * 100 if self.trade_history else 0.0,
+            "total_pnl": total_pnl,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "best_trade": best_trade,
+            "worst_trade": worst_trade,
+            "equity_curve": equity_curve
+        }
+
+    def show_trade_history(self, limit: int = 10):
+        """Zeigt letzte Trades"""
+        if not self.trade_history:
+            print("  Keine Trades bisher.")
+            return
+
+        print(f"\n  📋 LETZTE {min(limit, len(self.trade_history))} TRADES:")
+        print(f"  {'#':<3} {'Symbol':<10} {'Side':<6} {'Entry':>10} {'Exit':>10} {'PnL':>8}")
+        print("  " + "-" * 52)
+
+        for i, trade in enumerate(self.trade_history[-limit:][::-1], 1):
+            emoji = "🟢" if trade["pnl_percent"] > 0 else "🔴"
+            symbol = trade["symbol"].replace("USDT", "")
+            print(f"  {i:<3} {symbol:<10} {trade['side']:<6} "
+                  f"${trade['entry_price']:>9.4f} ${trade['exit_price']:>9.4f} "
+                  f"{emoji} {trade['pnl_percent']:>+6.2f}%")
+
+    def show_equity_curve(self, width: int = 40, height: int = 8):
+        """Zeigt ASCII Kapitalkurve"""
+        stats = self.get_trading_stats()
+        curve = stats["equity_curve"]
+
+        if len(curve) < 2:
+            print("  Nicht genug Trades für Kapitalkurve.")
+            return
+
+        print(f"\n  📈 KAPITALKURVE ({len(curve)} Trades):")
+
+        # Normalisieren für Anzeige
+        min_val = min(curve)
+        max_val = max(curve)
+        range_val = max_val - min_val if max_val != min_val else 1
+
+        # ASCII Chart erstellen
+        chart = [[' ' for _ in range(width)] for _ in range(height)]
+
+        for x, val in enumerate(curve):
+            if x >= width:
+                break
+            # Y-Position berechnen (invertiert weil Terminal von oben nach unten)
+            y = height - 1 - int((val - min_val) / range_val * (height - 1))
+            y = max(0, min(height - 1, y))
+            chart[y][x] = '█' if val >= 0 else '▄'
+
+        # Nulllinie zeichnen
+        zero_y = height - 1 - int((0 - min_val) / range_val * (height - 1)) if min_val < 0 else height - 1
+        zero_y = max(0, min(height - 1, zero_y))
+
+        # Chart ausgeben
+        print(f"  {max_val:>+6.1f}% ┤", end="")
+        for row in range(height):
+            if row > 0:
+                if row == zero_y:
+                    print(f"     0.0% ┼", end="")
+                else:
+                    print("           │", end="")
+            for col in range(width):
+                if chart[row][col] != ' ':
+                    print(chart[row][col], end="")
+                elif row == zero_y:
+                    print("─", end="")
+                else:
+                    print(" ", end="")
+            print()
+        print(f"  {min_val:>+6.1f}% └" + "─" * width)
+        print(f"           Trade 1" + " " * (width - 15) + f"Trade {len(curve)}")
+
     def show_status(self):
-        """Zeigt aktuellen Status"""
+        """Zeigt aktuellen Status inkl. Trade History und Statistiken"""
         print(f"\n{'='*60}")
         print("  TESTNET STATUS (Futures Only)")
         print(f"{'='*60}")
 
         futures_balance = self.get_futures_balance()
+        stats = self.get_trading_stats()
 
         print(f"  Futures Balance: ${futures_balance:,.2f} USDT")
         print(f"  Offene Positionen: {len(self.positions)}")
@@ -1228,8 +1365,26 @@ class BinanceTestnetTrader:
                     pnl = (pos.entry_price - current) / pos.entry_price * 100
 
                 emoji = "🟢" if pnl >= 0 else "🔴"
+                trailing = " TS" if pos.peak_price > 0 else ""
                 print(f"  {pos.symbol.replace('USDT', ''):<12} {pos.side:<6} "
-                      f"${pos.entry_price:>9.4f} ${current:>9.4f} {emoji} {pnl:>+7.2f}%")
+                      f"${pos.entry_price:>9.4f} ${current:>9.4f} {emoji} {pnl:>+7.2f}%{trailing}")
+
+        # Trading Statistiken
+        print(f"\n  📊 TRADING STATISTIKEN:")
+        print(f"  Trades: {stats['total_trades']} | "
+              f"Wins: {stats['wins']} | Losses: {stats['losses']} | "
+              f"Win-Rate: {stats['win_rate']:.1f}%")
+        if stats['total_trades'] > 0:
+            print(f"  Gesamt PnL: {stats['total_pnl']:+.2f}% | "
+                  f"Avg Win: {stats['avg_win']:+.2f}% | Avg Loss: {stats['avg_loss']:+.2f}%")
+            print(f"  Best: {stats['best_trade']:+.2f}% | Worst: {stats['worst_trade']:+.2f}%")
+
+        # Trade History
+        self.show_trade_history(5)
+
+        # Equity Curve
+        if stats['total_trades'] >= 3:
+            self.show_equity_curve()
 
         print(f"{'='*60}\n")
 
@@ -1249,11 +1404,13 @@ def run_testnet_auto_trading():
     print(f"  Trend-Filter: {'✅ AN' if config.USE_TREND_FILTER else '❌ AUS'}")
     if config.USE_TREND_FILTER:
         print(f"    Trend-Check: {config.TREND_CHECK_DAYS} Tage | Max Pullback: {config.TREND_MAX_PULLBACK}%")
-    print(f"  HTF Consensus Filter: {'✅ AN' if config.USE_HTF_SUPERTREND else '❌ AUS'}")
+    print(f"  BTC Supertrend Filter: {'✅ AN' if config.USE_HTF_SUPERTREND else '❌ AUS'}")
     if config.USE_HTF_SUPERTREND:
-        print(f"    BTC + ETH {config.HTF_TIMEFRAME} | Je 3 Indikatoren (ST+KAMA+JMA)")
-        print(f"    Signal-Stärke: STARK (5-6/6) | MODERAT (4/6) | SCHWACH (<4/6)")
+        print(f"    BTC {config.HTF_TIMEFRAME} Supertrend (Period={config.SUPERTREND_PERIOD}, Mult={config.SUPERTREND_MULTIPLIER})")
     print(f"  BTC/ETH 24h-Filter: {'✅ AN' if config.USE_BTC_MARKET_FILTER else '❌ AUS'}")
+    print(f"  Trailing Stop: {'✅ AN' if config.USE_TRAILING_STOP else '❌ AUS'}")
+    if config.USE_TRAILING_STOP:
+        print(f"    Aktivierung: +{config.TRAILING_STOP_ACTIVATION}% | Abstand: {config.TRAILING_STOP_DISTANCE}%")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
     print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
@@ -1279,9 +1436,9 @@ def run_testnet_auto_trading():
             short_allowed, short_reason = trader.is_trade_allowed_by_market("SHORT")
 
             if config.USE_HTF_SUPERTREND:
-                market = trader.get_market_consensus()
-                print(f"\n[{timestamp}] 📊 HTF {config.HTF_TIMEFRAME}: {market['info']}")
-                print(f"    {market['detail']}")
+                st = trader.get_htf_supertrend("BTCUSDT")
+                st_emoji = "🟢" if st["direction"] == "BULLISH" else "🔴" if st["direction"] == "BEARISH" else "⚪"
+                print(f"\n[{timestamp}] 📊 BTC {config.HTF_TIMEFRAME}: {st_emoji} {st['direction']} @ ${st['price']:,.0f} (ST: ${st['value']:,.0f})")
             else:
                 market = trader.get_market_trend()
                 print(f"\n[{timestamp}] 📊 Markt: BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%")

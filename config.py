@@ -40,6 +40,11 @@ MIN_GAINER_PERCENT = 10.0         # Nur Coins mit mind. +10% als Top Gainer
 TAKE_PROFIT_PERCENT = 4.0   # Verkaufen bei +4% (Mean Reversion Target)
 STOP_LOSS_PERCENT = 5.0     # Verkaufen bei -5%
 
+# Trailing Stop (aktiviert sich nach Mindestgewinn)
+USE_TRAILING_STOP = True         # Trailing Stop aktivieren
+TRAILING_STOP_ACTIVATION = 2.0   # Ab +2% Gewinn wird Trailing Stop aktiv
+TRAILING_STOP_DISTANCE = 1.5     # Trailing Stop folgt mit 1.5% Abstand
+
 # Mean Reversion Strategie (automatisch)
 AUTO_BUY_ENABLED = True           # Automatisch kaufen
 BUY_LOSER_THRESHOLD = -10.0       # Kaufe Coins die -10% oder mehr gefallen sind
