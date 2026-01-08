@@ -31,3 +31,4 @@ backtest_trades.csv
 # OS
 .DS_Store
 Thumbs.db
+dashboard_data.json
