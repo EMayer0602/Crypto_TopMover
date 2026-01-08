@@ -122,6 +122,31 @@ Preis fällt auf $103 → 🔔 TRAILING STOP → Gewinn gesichert!
 
 ---
 
+## RSI Filter
+
+Verbessert Entry-Timing durch RSI (Relative Strength Index).
+
+**Logik:**
+```
+LONG Entry:  Nur wenn RSI ≤ 35 (überverkauft)
+SHORT Entry: Nur wenn RSI ≥ 65 (überkauft)
+```
+
+**Config:**
+```python
+USE_RSI_FILTER = True    # RSI Filter aktivieren
+RSI_PERIOD = 14          # RSI Periode
+RSI_OVERSOLD = 35        # Für Longs: RSI muss darunter sein
+RSI_OVERBOUGHT = 65      # Für Shorts: RSI muss darüber sein
+```
+
+**Vorteile:**
+- Besseres Entry-Timing bei Mean Reversion
+- Verhindert Käufe wenn Coin noch nicht überverkauft
+- Verhindert Shorts wenn Coin noch nicht überkauft
+
+---
+
 ## BTC/ETH 24h-Filter (Legacy)
 
 Einfacher Filter basierend auf 24h-Preisänderung.

@@ -45,6 +45,12 @@ USE_TRAILING_STOP = True         # Trailing Stop aktivieren
 TRAILING_STOP_ACTIVATION = 2.0   # Ab +2% Gewinn wird Trailing Stop aktiv
 TRAILING_STOP_DISTANCE = 1.5     # Trailing Stop folgt mit 1.5% Abstand
 
+# RSI Filter (verbessert Entry-Timing)
+USE_RSI_FILTER = True            # RSI Filter aktivieren
+RSI_PERIOD = 14                  # RSI Periode
+RSI_OVERSOLD = 35                # Für Longs: RSI muss unter diesem Wert sein
+RSI_OVERBOUGHT = 65              # Für Shorts: RSI muss über diesem Wert sein
+
 # Mean Reversion Strategie (automatisch)
 AUTO_BUY_ENABLED = True           # Automatisch kaufen
 BUY_LOSER_THRESHOLD = -10.0       # Kaufe Coins die -10% oder mehr gefallen sind

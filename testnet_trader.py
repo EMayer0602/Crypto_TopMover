@@ -10,7 +10,7 @@ import hashlib
 import time
 import requests
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import json
 import os
@@ -605,6 +605,66 @@ class BinanceTestnetTrader:
             "close": float(k[4]),
             "volume": float(k[5]),
         } for k in klines]
+
+    def calculate_rsi(self, symbol: str, period: int = 14) -> float:
+        """
+        Berechnet RSI (Relative Strength Index) für ein Symbol.
+        Returns: RSI Wert (0-100) oder 50 bei Fehler
+        """
+        # Hole genug Klines für RSI Berechnung
+        klines = self.get_klines(symbol, "1h", period + 10)
+        if len(klines) < period + 1:
+            return 50.0  # Neutral wenn nicht genug Daten
+
+        closes = [k["close"] for k in klines]
+
+        # Berechne Gains und Losses
+        gains = []
+        losses = []
+
+        for i in range(1, len(closes)):
+            change = closes[i] - closes[i-1]
+            gains.append(max(0, change))
+            losses.append(max(0, -change))
+
+        # Berechne Average Gain und Loss
+        if len(gains) < period:
+            return 50.0
+
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+
+        if avg_loss == 0:
+            return 100.0 if avg_gain > 0 else 50.0
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        return rsi
+
+    def check_rsi_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+        """
+        Prüft ob RSI einen Entry erlaubt.
+        Returns: (erlaubt, grund)
+        """
+        if not config.USE_RSI_FILTER:
+            return (True, "RSI Filter deaktiviert")
+
+        rsi = self.calculate_rsi(symbol, config.RSI_PERIOD)
+
+        if side == "LONG":
+            if rsi <= config.RSI_OVERSOLD:
+                return (True, f"RSI {rsi:.1f} ≤ {config.RSI_OVERSOLD} (überverkauft) ✓")
+            else:
+                return (False, f"RSI {rsi:.1f} > {config.RSI_OVERSOLD} (nicht überverkauft)")
+
+        elif side == "SHORT":
+            if rsi >= config.RSI_OVERBOUGHT:
+                return (True, f"RSI {rsi:.1f} ≥ {config.RSI_OVERBOUGHT} (überkauft) ✓")
+            else:
+                return (False, f"RSI {rsi:.1f} < {config.RSI_OVERBOUGHT} (nicht überkauft)")
+
+        return (True, "RSI OK")
 
     def check_trend_consistency(self, symbol: str) -> str:
         """
@@ -1482,6 +1542,9 @@ def run_testnet_auto_trading():
     print(f"  Trailing Stop: {'✅ AN' if config.USE_TRAILING_STOP else '❌ AUS'}")
     if config.USE_TRAILING_STOP:
         print(f"    Aktivierung: +{config.TRAILING_STOP_ACTIVATION}% | Abstand: {config.TRAILING_STOP_DISTANCE}%")
+    print(f"  RSI Filter: {'✅ AN' if config.USE_RSI_FILTER else '❌ AUS'}")
+    if config.USE_RSI_FILTER:
+        print(f"    Long: RSI ≤ {config.RSI_OVERSOLD} | Short: RSI ≥ {config.RSI_OVERBOUGHT}")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
     print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
@@ -1584,6 +1647,13 @@ def run_testnet_auto_trading():
                                 print(f"  ⏭️  Skip {coin['base']} - im Downtrend (kein Mean Reversion)")
                                 continue
 
+                        # RSI Filter: Nur kaufen wenn überverkauft
+                        if config.USE_RSI_FILTER:
+                            rsi_ok, rsi_reason = trader.check_rsi_entry(coin["symbol"], "LONG")
+                            if not rsi_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
+                                continue
+
                         print(f"\n[{timestamp}] 📉 MEAN REV LONG: {coin['base']} @ {coin['change_percent']:.1f}%")
                         result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                         if result:
@@ -1600,6 +1670,13 @@ def run_testnet_auto_trading():
                             trend = trader.check_trend_consistency(coin["symbol"])
                             if trend == "UP":
                                 print(f"  ⏭️  Skip {coin['base']} - im Uptrend (kein Mean Reversion)")
+                                continue
+
+                        # RSI Filter: Nur shorten wenn überkauft
+                        if config.USE_RSI_FILTER:
+                            rsi_ok, rsi_reason = trader.check_rsi_entry(coin["symbol"], "SHORT")
+                            if not rsi_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
                                 continue
 
                         print(f"\n[{timestamp}] 📈 MEAN REV SHORT: {coin['base']} @ +{coin['change_percent']:.1f}%")
