@@ -48,23 +48,23 @@ TRAILING_STOP_DISTANCE = 1.5     # Trailing Stop folgt mit 1.5% Abstand
 # RSI Filter (verbessert Entry-Timing)
 USE_RSI_FILTER = True            # RSI Filter aktivieren
 RSI_PERIOD = 14                  # RSI Periode
-RSI_OVERSOLD = 35                # Für Longs: RSI muss unter diesem Wert sein
-RSI_OVERBOUGHT = 65              # Für Shorts: RSI muss über diesem Wert sein
+RSI_OVERSOLD = 45                # Für Longs: RSI unter 45 (gelockert von 35)
+RSI_OVERBOUGHT = 55              # Für Shorts: RSI über 55 (gelockert von 65)
 
 # Supertrend Entry Filter (verhindert Einstieg nach Pump)
 USE_SUPERTREND_ENTRY_FILTER = True    # Supertrend als Entry-Filter aktivieren
 ENTRY_SUPERTREND_TIMEFRAME = "5m"     # Timeframe für Entry-Check (5min Kerzen)
 ENTRY_SUPERTREND_PERIOD = 10          # ATR Periode
 ENTRY_SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
-ENTRY_MAX_ATR_DISTANCE = 1.5          # Max. Abstand in ATR-Einheiten (dynamisch!)
+ENTRY_MAX_ATR_DISTANCE = 2.0          # Max. Abstand in ATR (gelockert von 1.5)
 
 # Mean Reversion Strategie (automatisch)
 AUTO_BUY_ENABLED = True           # Automatisch kaufen
-BUY_LOSER_THRESHOLD = -10.0       # Kaufe Coins die -10% oder mehr gefallen sind
+BUY_LOSER_THRESHOLD = -7.0        # Kaufe Coins ab -7% (gelockert von -10%)
 MIN_LOSER_VOLUME = 5000000        # Mindestvolumen für Auto-Buy (5M USDT)
 
 # SHORT Strategie (Futures)
-SHORT_GAINER_THRESHOLD = 25.0     # Shorte Coins die +25% oder mehr gestiegen sind
+SHORT_GAINER_THRESHOLD = 15.0     # Shorte Coins ab +15% (gelockert von +25%)
 SHORT_TAKE_PROFIT = 5.0           # TP für Shorts
 SHORT_STOP_LOSS = 8.0             # SL für Shorts
 
