@@ -1388,6 +1388,55 @@ class BinanceTestnetTrader:
 
         print(f"{'='*60}\n")
 
+    def export_dashboard_data(self):
+        """Exportiert Daten für das HTML-Dashboard"""
+        stats = self.get_trading_stats()
+
+        # Positionen mit aktuellen PnL
+        positions_data = {}
+        for key, pos in self.positions.items():
+            current_price = self._get_futures_price(pos.symbol) or pos.entry_price
+            if pos.side == "LONG":
+                current_pnl = (current_price - pos.entry_price) / pos.entry_price * 100
+            else:
+                current_pnl = (pos.entry_price - current_price) / pos.entry_price * 100
+
+            positions_data[key] = {
+                "symbol": pos.symbol,
+                "side": pos.side,
+                "entry_price": pos.entry_price,
+                "quantity": pos.quantity,
+                "entry_time": pos.entry_time,
+                "peak_price": pos.peak_price,
+                "current_price": current_price,
+                "current_pnl": current_pnl
+            }
+
+        # BTC Supertrend Status
+        btc_st = None
+        if config.USE_HTF_SUPERTREND:
+            st = self.get_htf_supertrend("BTCUSDT")
+            btc_st = {
+                "direction": st["direction"],
+                "value": st["value"],
+                "price": st["price"]
+            }
+
+        data = {
+            "timestamp": datetime.now().isoformat(),
+            "balance": self.get_futures_balance(),
+            "positions": positions_data,
+            "trade_history": self.trade_history,
+            "stats": stats,
+            "btc_supertrend": btc_st
+        }
+
+        try:
+            with open("dashboard_data.json", "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠️  Dashboard Export Fehler: {e}")
+
 
 def run_testnet_auto_trading():
     """Startet automatisches Trading auf Testnet"""
@@ -1416,6 +1465,7 @@ def run_testnet_auto_trading():
     print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
     print(f"  Scan Interval: {config.SCAN_INTERVAL_SECONDS}s")
     print(f"{'='*70}")
+    print("  📊 Dashboard: dashboard.html öffnen für Live-Ansicht")
     print("  [Strg+C zum Beenden]\n")
 
     trader.show_status()
@@ -1539,6 +1589,9 @@ def run_testnet_auto_trading():
             futures_bal = trader.get_futures_balance()
             print(f"\n[{timestamp}] Positionen: {len(trader.positions)} | "
                   f"Futures: ${futures_bal:,.0f}")
+
+            # 5. Dashboard aktualisieren
+            trader.export_dashboard_data()
 
             time.sleep(config.SCAN_INTERVAL_SECONDS)
 
