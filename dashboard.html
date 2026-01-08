@@ -505,7 +505,8 @@
                 return;
             }
 
-            const xLabels = equityCurve.map((_, i) => `Trade ${i + 1}`);
+            // X-Achse: Zeitstempel statt Trade-Nummer
+            const xLabels = trades ? trades.map(t => new Date(t.timestamp)) : equityCurve.map((_, i) => i);
             const positionSize = stats.position_size || 500;
 
             // Hover-Text mit Trade-Details
@@ -568,9 +569,12 @@
                     color: '#e8e8e8'
                 },
                 xaxis: {
+                    type: 'date',
                     showgrid: true,
                     gridcolor: 'rgba(255,255,255,0.1)',
-                    tickfont: { color: '#888' }
+                    tickfont: { color: '#888' },
+                    tickformat: '%d.%m. %H:%M',
+                    title: 'Zeit'
                 },
                 yaxis: {
                     title: chartMode === 'usd' ? 'Profit/Loss (USD)' : 'Kumulative PnL (%)',
