@@ -399,6 +399,67 @@ class BinanceTestnetTrader:
 
         return None
 
+    def close_all_positions(self) -> dict:
+        """Schließt ALLE offenen Positionen sofort"""
+        print(f"\n{'='*60}")
+        print("  ⚠️  CLOSE ALL POSITIONS")
+        print(f"{'='*60}")
+
+        if not self.positions:
+            print("  Keine offenen Positionen vorhanden.")
+            return {"closed": 0, "failed": 0}
+
+        closed = 0
+        failed = 0
+        total_pnl = 0.0
+
+        # Kopie der Keys, da wir während Iteration löschen
+        position_keys = list(self.positions.keys())
+
+        for key in position_keys:
+            pos = self.positions.get(key)
+            if not pos:
+                continue
+
+            print(f"\n  Schließe {pos.side} {pos.symbol}...")
+
+            if pos.side == "LONG":
+                result = self.futures_close_long(pos.symbol)
+            else:  # SHORT
+                result = self.futures_close_short(pos.symbol)
+
+            if result:
+                closed += 1
+                # PnL aus letztem Trade holen
+                if self.trade_history:
+                    total_pnl += self.trade_history[-1]["pnl_percent"]
+            else:
+                failed += 1
+
+        print(f"\n{'='*60}")
+        print(f"  ✅ Geschlossen: {closed} | ❌ Fehlgeschlagen: {failed}")
+        print(f"  📊 Gesamt PnL: {total_pnl:+.2f}%")
+        print(f"{'='*60}\n")
+
+        # Dashboard aktualisieren
+        self.export_dashboard_data()
+
+        return {"closed": closed, "failed": failed, "total_pnl": total_pnl}
+
+    def check_close_all_signal(self) -> bool:
+        """Prüft ob Close-All Signal existiert und führt es aus"""
+        signal_file = "close_all.signal"
+        if os.path.exists(signal_file):
+            print("\n🚨 CLOSE ALL SIGNAL EMPFANGEN!")
+            self.close_all_positions()
+            # Signal-Datei löschen
+            try:
+                os.remove(signal_file)
+            except:
+                pass
+            return True
+        return False
+
     def _get_futures_price(self, symbol: str) -> Optional[float]:
         """Holt aktuellen Futures Preis"""
         url = f"{self.futures_url}/fapi/v1/ticker/price"
@@ -1558,6 +1619,9 @@ def run_testnet_auto_trading():
     try:
         while True:
             timestamp = time.strftime('%H:%M:%S')
+
+            # 0. Close-All Signal prüfen
+            trader.check_close_all_signal()
 
             # 1. TP/SL prüfen
             trader.check_positions_tp_sl()
