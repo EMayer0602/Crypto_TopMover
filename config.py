@@ -56,7 +56,7 @@ USE_SUPERTREND_ENTRY_FILTER = True    # Supertrend als Entry-Filter aktivieren
 ENTRY_SUPERTREND_TIMEFRAME = "5m"     # Timeframe für Entry-Check (5min Kerzen)
 ENTRY_SUPERTREND_PERIOD = 10          # ATR Periode
 ENTRY_SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
-ENTRY_MAX_DISTANCE_PERCENT = 1.5      # Max. Abstand zum Supertrend in % (verhindert Chasing)
+ENTRY_MAX_ATR_DISTANCE = 1.5          # Max. Abstand in ATR-Einheiten (dynamisch!)
 
 # Mean Reversion Strategie (automatisch)
 AUTO_BUY_ENABLED = True           # Automatisch kaufen

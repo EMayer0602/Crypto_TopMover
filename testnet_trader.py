@@ -730,8 +730,7 @@ class BinanceTestnetTrader:
     def check_supertrend_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
         """
         Prüft ob Supertrend einen Entry erlaubt (verhindert Chasing nach Pump).
-        Für LONG: Preis darf nicht zu weit ÜBER Supertrend sein
-        Für SHORT: Preis darf nicht zu weit UNTER Supertrend sein
+        DYNAMISCH: Verwendet ATR statt fester Prozente - passt sich an Volatilität an.
         Returns: (erlaubt, grund)
         """
         if not config.USE_SUPERTREND_ENTRY_FILTER:
@@ -744,6 +743,14 @@ class BinanceTestnetTrader:
         if len(klines) < config.ENTRY_SUPERTREND_PERIOD + 2:
             return (True, "Nicht genug Daten für Supertrend")
 
+        # Berechne ATR für dynamische Schwelle
+        atr_values = self.calculate_atr(klines, config.ENTRY_SUPERTREND_PERIOD)
+        if not atr_values or atr_values[-1] is None:
+            return (True, "ATR nicht verfügbar")
+
+        current_atr = atr_values[-1]
+        current_price = klines[-1]["close"]
+
         # Berechne Supertrend
         st = self.calculate_supertrend(
             klines,
@@ -754,29 +761,32 @@ class BinanceTestnetTrader:
         if st["direction"] == "NEUTRAL" or st["value"] == 0:
             return (True, "Supertrend nicht verfügbar")
 
-        current_price = st["price"]
         st_value = st["value"]
 
-        # Berechne Abstand zum Supertrend in %
-        distance_percent = ((current_price - st_value) / st_value) * 100
+        # Berechne Abstand zum Supertrend in ATR-Einheiten (dynamisch!)
+        distance_price = current_price - st_value
+        distance_atr = distance_price / current_atr if current_atr > 0 else 0
+
+        # Max erlaubter Abstand in ATR (config)
+        max_atr_distance = config.ENTRY_MAX_ATR_DISTANCE
 
         if side == "LONG":
             # Für LONG: Preis sollte NAH AM oder UNTER Supertrend sein
-            if distance_percent > config.ENTRY_MAX_DISTANCE_PERCENT:
-                return (False, f"Preis {distance_percent:+.1f}% über ST → Chasing! (max {config.ENTRY_MAX_DISTANCE_PERCENT}%)")
-            elif distance_percent < 0:
-                return (True, f"Preis {distance_percent:.1f}% unter ST → Guter Entry ✓")
+            if distance_atr > max_atr_distance:
+                return (False, f"Preis {distance_atr:.1f}x ATR über ST → Pump! (max {max_atr_distance}x)")
+            elif distance_atr < 0:
+                return (True, f"Preis {abs(distance_atr):.1f}x ATR unter ST → Pullback ✓")
             else:
-                return (True, f"Preis {distance_percent:+.1f}% über ST → OK ✓")
+                return (True, f"Preis {distance_atr:.1f}x ATR über ST → OK ✓")
 
         elif side == "SHORT":
             # Für SHORT: Preis sollte NAH AM oder ÜBER Supertrend sein
-            if distance_percent < -config.ENTRY_MAX_DISTANCE_PERCENT:
-                return (False, f"Preis {distance_percent:.1f}% unter ST → Chasing! (max -{config.ENTRY_MAX_DISTANCE_PERCENT}%)")
-            elif distance_percent > 0:
-                return (True, f"Preis {distance_percent:+.1f}% über ST → Guter Entry ✓")
+            if distance_atr < -max_atr_distance:
+                return (False, f"Preis {abs(distance_atr):.1f}x ATR unter ST → Dump! (max {max_atr_distance}x)")
+            elif distance_atr > 0:
+                return (True, f"Preis {distance_atr:.1f}x ATR über ST → Extended ✓")
             else:
-                return (True, f"Preis {distance_percent:.1f}% unter ST → OK ✓")
+                return (True, f"Preis {abs(distance_atr):.1f}x ATR unter ST → OK ✓")
 
         return (True, "Supertrend OK")
 
