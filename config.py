@@ -51,6 +51,13 @@ RSI_PERIOD = 14                  # RSI Periode
 RSI_OVERSOLD = 35                # Für Longs: RSI muss unter diesem Wert sein
 RSI_OVERBOUGHT = 65              # Für Shorts: RSI muss über diesem Wert sein
 
+# Supertrend Entry Filter (verhindert Einstieg nach Pump)
+USE_SUPERTREND_ENTRY_FILTER = True    # Supertrend als Entry-Filter aktivieren
+ENTRY_SUPERTREND_TIMEFRAME = "5m"     # Timeframe für Entry-Check (5min Kerzen)
+ENTRY_SUPERTREND_PERIOD = 10          # ATR Periode
+ENTRY_SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
+ENTRY_MAX_DISTANCE_PERCENT = 1.5      # Max. Abstand zum Supertrend in % (verhindert Chasing)
+
 # Mean Reversion Strategie (automatisch)
 AUTO_BUY_ENABLED = True           # Automatisch kaufen
 BUY_LOSER_THRESHOLD = -10.0       # Kaufe Coins die -10% oder mehr gefallen sind

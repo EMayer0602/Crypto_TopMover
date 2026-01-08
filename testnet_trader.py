@@ -727,6 +727,59 @@ class BinanceTestnetTrader:
 
         return (True, "RSI OK")
 
+    def check_supertrend_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+        """
+        Prüft ob Supertrend einen Entry erlaubt (verhindert Chasing nach Pump).
+        Für LONG: Preis darf nicht zu weit ÜBER Supertrend sein
+        Für SHORT: Preis darf nicht zu weit UNTER Supertrend sein
+        Returns: (erlaubt, grund)
+        """
+        if not config.USE_SUPERTREND_ENTRY_FILTER:
+            return (True, "Supertrend Entry Filter deaktiviert")
+
+        # Hole 5min Klines für Entry-Check
+        limit = config.ENTRY_SUPERTREND_PERIOD * 3 + 10
+        klines = self.get_klines(symbol, config.ENTRY_SUPERTREND_TIMEFRAME, limit)
+
+        if len(klines) < config.ENTRY_SUPERTREND_PERIOD + 2:
+            return (True, "Nicht genug Daten für Supertrend")
+
+        # Berechne Supertrend
+        st = self.calculate_supertrend(
+            klines,
+            config.ENTRY_SUPERTREND_PERIOD,
+            config.ENTRY_SUPERTREND_MULTIPLIER
+        )
+
+        if st["direction"] == "NEUTRAL" or st["value"] == 0:
+            return (True, "Supertrend nicht verfügbar")
+
+        current_price = st["price"]
+        st_value = st["value"]
+
+        # Berechne Abstand zum Supertrend in %
+        distance_percent = ((current_price - st_value) / st_value) * 100
+
+        if side == "LONG":
+            # Für LONG: Preis sollte NAH AM oder UNTER Supertrend sein
+            if distance_percent > config.ENTRY_MAX_DISTANCE_PERCENT:
+                return (False, f"Preis {distance_percent:+.1f}% über ST → Chasing! (max {config.ENTRY_MAX_DISTANCE_PERCENT}%)")
+            elif distance_percent < 0:
+                return (True, f"Preis {distance_percent:.1f}% unter ST → Guter Entry ✓")
+            else:
+                return (True, f"Preis {distance_percent:+.1f}% über ST → OK ✓")
+
+        elif side == "SHORT":
+            # Für SHORT: Preis sollte NAH AM oder ÜBER Supertrend sein
+            if distance_percent < -config.ENTRY_MAX_DISTANCE_PERCENT:
+                return (False, f"Preis {distance_percent:.1f}% unter ST → Chasing! (max -{config.ENTRY_MAX_DISTANCE_PERCENT}%)")
+            elif distance_percent > 0:
+                return (True, f"Preis {distance_percent:+.1f}% über ST → Guter Entry ✓")
+            else:
+                return (True, f"Preis {distance_percent:.1f}% unter ST → OK ✓")
+
+        return (True, "Supertrend OK")
+
     def check_trend_consistency(self, symbol: str) -> str:
         """
         Prüft die letzten 3 Tage auf Trend-Konsistenz.
@@ -1718,6 +1771,14 @@ def run_testnet_auto_trading():
                                 print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
                                 continue
 
+                        # Supertrend Entry Filter: Nicht einsteigen wenn zu weit über ST (Chasing)
+                        if config.USE_SUPERTREND_ENTRY_FILTER:
+                            st_ok, st_reason = trader.check_supertrend_entry(coin["symbol"], "LONG")
+                            if not st_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
+                                continue
+                            print(f"  ✓ ST Entry: {st_reason}")
+
                         print(f"\n[{timestamp}] 📉 MEAN REV LONG: {coin['base']} @ {coin['change_percent']:.1f}%")
                         result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                         if result:
@@ -1742,6 +1803,14 @@ def run_testnet_auto_trading():
                             if not rsi_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
                                 continue
+
+                        # Supertrend Entry Filter: Nicht einsteigen wenn zu weit unter ST (Chasing)
+                        if config.USE_SUPERTREND_ENTRY_FILTER:
+                            st_ok, st_reason = trader.check_supertrend_entry(coin["symbol"], "SHORT")
+                            if not st_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
+                                continue
+                            print(f"  ✓ ST Entry: {st_reason}")
 
                         print(f"\n[{timestamp}] 📈 MEAN REV SHORT: {coin['base']} @ +{coin['change_percent']:.1f}%")
                         result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
