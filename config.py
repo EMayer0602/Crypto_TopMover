@@ -78,7 +78,7 @@ BTC_TREND_THRESHOLD = 3.0         # Ab +/-3% 24h gilt BTC als trending
 BTC_TREND_TIMEFRAME = "24h"       # Timeframe für BTC-Check (1h, 4h, 24h)
 
 # HTF Supertrend Filter (BTC als Markt-Indikator)
-USE_HTF_SUPERTREND = True         # Supertrend auf BTC 4h als Markt-Filter
+USE_HTF_SUPERTREND = False        # DEAKTIVIERT - Trade ohne Markt-Filter
 HTF_TIMEFRAME = "4h"              # Timeframe für Supertrend (1h, 4h, 1d)
 SUPERTREND_PERIOD = 10            # ATR Periode
 SUPERTREND_MULTIPLIER = 3.0       # ATR Multiplikator
