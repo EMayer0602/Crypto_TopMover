@@ -42,6 +42,7 @@
             justify-content: center;
             gap: 30px;
             flex-wrap: wrap;
+            align-items: center;
         }
         .status-item {
             display: flex;
@@ -105,9 +106,36 @@
             color: #888;
             text-transform: uppercase;
         }
+        .stat-sub {
+            font-size: 0.75em;
+            color: #666;
+            margin-top: 3px;
+        }
         .chart-container {
             height: 400px;
             margin-top: 10px;
+        }
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .toggle-btn {
+            background: rgba(0,212,255,0.2);
+            border: 1px solid #00d4ff;
+            color: #00d4ff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.2s;
+        }
+        .toggle-btn:hover {
+            background: rgba(0,212,255,0.4);
+        }
+        .toggle-btn.active {
+            background: #00d4ff;
+            color: #1a1a2e;
         }
         table {
             width: 100%;
@@ -210,6 +238,18 @@
             background: rgba(255,68,68,0.2);
             border: 1px solid #ff4444;
         }
+        .big-pnl {
+            font-size: 3em;
+            font-weight: bold;
+            text-align: center;
+            padding: 20px;
+        }
+        .pnl-details {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -231,34 +271,50 @@
             </div>
         </header>
 
+        <!-- Big PnL Display -->
+        <div class="card" style="margin-bottom: 20px;">
+            <div class="big-pnl" id="bigPnl">$0.00</div>
+            <div class="pnl-details">
+                <span id="pnlPercent">0.00%</span>
+                <span>|</span>
+                <span id="tradeCount">0 Trades</span>
+                <span>|</span>
+                <span>Win-Rate: <span id="winRateSmall">0%</span></span>
+            </div>
+        </div>
+
         <div class="grid">
             <!-- Stats Overview -->
             <div class="card">
                 <h2>📊 Trading Statistiken</h2>
                 <div class="stats-grid">
                     <div class="stat-box">
-                        <div class="stat-value" id="totalPnl">0.00%</div>
-                        <div class="stat-label">Gesamt PnL</div>
-                    </div>
-                    <div class="stat-box">
                         <div class="stat-value neutral" id="winRate">0%</div>
                         <div class="stat-label">Win Rate</div>
                     </div>
                     <div class="stat-box">
-                        <div class="stat-value" id="totalTrades">0</div>
-                        <div class="stat-label">Trades</div>
+                        <div class="stat-value" id="profitFactor">0.00</div>
+                        <div class="stat-label">Profit Factor</div>
                     </div>
                     <div class="stat-box">
-                        <div class="stat-value positive" id="avgWin">+0.00%</div>
+                        <div class="stat-value positive" id="avgWin">$0.00</div>
                         <div class="stat-label">Avg Win</div>
+                        <div class="stat-sub" id="avgWinPct">0.00%</div>
                     </div>
                     <div class="stat-box">
-                        <div class="stat-value negative" id="avgLoss">0.00%</div>
+                        <div class="stat-value negative" id="avgLoss">$0.00</div>
                         <div class="stat-label">Avg Loss</div>
+                        <div class="stat-sub" id="avgLossPct">0.00%</div>
                     </div>
                     <div class="stat-box">
-                        <div class="stat-value" id="winsLosses">0 / 0</div>
-                        <div class="stat-label">Wins / Losses</div>
+                        <div class="stat-value positive" id="bestTrade">$0.00</div>
+                        <div class="stat-label">Best Trade</div>
+                        <div class="stat-sub" id="bestTradePct">0.00%</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value negative" id="worstTrade">$0.00</div>
+                        <div class="stat-label">Worst Trade</div>
+                        <div class="stat-sub" id="worstTradePct">0.00%</div>
                     </div>
                 </div>
             </div>
@@ -274,7 +330,13 @@
 
         <!-- Equity Curve mit Plotly -->
         <div class="card" style="margin-bottom: 20px;">
-            <h2>📈 Equity Curve</h2>
+            <div class="chart-header">
+                <h2>📈 Equity Curve</h2>
+                <div>
+                    <button class="toggle-btn active" id="btnUSD" onclick="setChartMode('usd')">USD</button>
+                    <button class="toggle-btn" id="btnPct" onclick="setChartMode('pct')">%</button>
+                </div>
+            </div>
             <div class="chart-container" id="equityChart"></div>
         </div>
 
@@ -292,10 +354,11 @@
                             <th>Entry</th>
                             <th>Exit</th>
                             <th>PnL</th>
+                            <th>USD</th>
                         </tr>
                     </thead>
                     <tbody id="tradesBody">
-                        <tr><td colspan="7" class="no-data">Keine Trades bisher</td></tr>
+                        <tr><td colspan="8" class="no-data">Keine Trades bisher</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -308,9 +371,16 @@
 
     <script>
         let lastTradeCount = 0;
+        let currentData = null;
+        let chartMode = 'usd'; // 'usd' oder 'pct'
 
         function formatNumber(num, decimals = 2) {
             return num.toFixed(decimals);
+        }
+
+        function formatUSD(num) {
+            const prefix = num >= 0 ? '+$' : '-$';
+            return prefix + Math.abs(num).toFixed(2);
         }
 
         function formatTime(isoString) {
@@ -324,22 +394,37 @@
             });
         }
 
-        function updatePlotlyChart(equityCurve, trades) {
+        function setChartMode(mode) {
+            chartMode = mode;
+            document.getElementById('btnUSD').className = 'toggle-btn' + (mode === 'usd' ? ' active' : '');
+            document.getElementById('btnPct').className = 'toggle-btn' + (mode === 'pct' ? ' active' : '');
+            if (currentData) {
+                updatePlotlyChart(currentData.stats, currentData.trade_history);
+            }
+        }
+
+        function updatePlotlyChart(stats, trades) {
+            const equityCurve = chartMode === 'usd' ? stats.equity_curve_usd : stats.equity_curve;
+            const suffix = chartMode === 'usd' ? '$' : '%';
+            const prefix = chartMode === 'usd' ? '$' : '';
+
             if (!equityCurve || equityCurve.length === 0) {
                 document.getElementById('equityChart').innerHTML = '<div class="no-data">Keine Daten für Chart</div>';
                 return;
             }
 
-            // X-Achse: Trade Labels mit Info
             const xLabels = equityCurve.map((_, i) => `Trade ${i + 1}`);
+            const positionSize = stats.position_size || 500;
 
             // Hover-Text mit Trade-Details
-            const hoverText = trades ? trades.map((t, i) =>
-                `<b>${t.symbol.replace('USDT', '')}</b><br>` +
-                `${t.side}<br>` +
-                `PnL: ${t.pnl_percent >= 0 ? '+' : ''}${t.pnl_percent.toFixed(2)}%<br>` +
-                `Kumulativ: ${equityCurve[i] >= 0 ? '+' : ''}${equityCurve[i].toFixed(2)}%`
-            ) : xLabels;
+            const hoverText = trades ? trades.map((t, i) => {
+                const pnlUsd = positionSize * t.pnl_percent / 100;
+                return `<b>${t.symbol.replace('USDT', '')}</b><br>` +
+                    `${t.side}<br>` +
+                    `PnL: ${t.pnl_percent >= 0 ? '+' : ''}${t.pnl_percent.toFixed(2)}%<br>` +
+                    `USD: ${formatUSD(pnlUsd)}<br>` +
+                    `Kumulativ: ${chartMode === 'usd' ? formatUSD(equityCurve[i]) : (equityCurve[i] >= 0 ? '+' : '') + equityCurve[i].toFixed(2) + '%'}`;
+            }) : xLabels;
 
             // Farben basierend auf PnL
             const colors = equityCurve.map(val => val >= 0 ? '#00ff88' : '#ff4444');
@@ -396,16 +481,17 @@
                     tickfont: { color: '#888' }
                 },
                 yaxis: {
-                    title: 'Kumulative PnL (%)',
+                    title: chartMode === 'usd' ? 'Profit/Loss (USD)' : 'Kumulative PnL (%)',
                     showgrid: true,
                     gridcolor: 'rgba(255,255,255,0.1)',
                     tickfont: { color: '#888' },
-                    ticksuffix: '%',
+                    tickprefix: chartMode === 'usd' ? '$' : '',
+                    ticksuffix: chartMode === 'usd' ? '' : '%',
                     zeroline: true,
                     zerolinecolor: 'rgba(255,255,255,0.3)',
                     zerolinewidth: 2
                 },
-                margin: { l: 60, r: 30, t: 30, b: 50 },
+                margin: { l: 70, r: 30, t: 30, b: 50 },
                 showlegend: false,
                 hovermode: 'x unified',
                 hoverlabel: {
@@ -425,7 +511,7 @@
             Plotly.newPlot('equityChart', [trace2, trace1], layout, config);
         }
 
-        function updatePositions(positions) {
+        function updatePositions(positions, positionSize) {
             const container = document.getElementById('positionsContainer');
 
             if (!positions || Object.keys(positions).length === 0) {
@@ -436,6 +522,7 @@
             let html = '';
             for (const [key, pos] of Object.entries(positions)) {
                 const pnl = pos.current_pnl || 0;
+                const pnlUsd = positionSize * pnl / 100;
                 const pnlClass = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
                 const sideClass = pos.side === 'LONG' ? 'side-long' : 'side-short';
                 const trailingHtml = pos.peak_price > 0 ? '<span class="trailing-active">TS AKTIV</span>' : '';
@@ -451,7 +538,8 @@
                             <span style="color:#888">Entry: $${formatNumber(pos.entry_price, 4)}</span>
                         </div>
                         <div class="position-pnl ${pnlClass}">
-                            ${pnl >= 0 ? '+' : ''}${formatNumber(pnl)}%
+                            ${formatUSD(pnlUsd)}
+                            <span style="font-size:0.6em">(${pnl >= 0 ? '+' : ''}${formatNumber(pnl)}%)</span>
                         </div>
                     </div>
                 `;
@@ -459,11 +547,11 @@
             container.innerHTML = html;
         }
 
-        function updateTrades(trades) {
+        function updateTrades(trades, positionSize) {
             const tbody = document.getElementById('tradesBody');
 
             if (!trades || trades.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="no-data">Keine Trades bisher</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="no-data">Keine Trades bisher</td></tr>';
                 return;
             }
 
@@ -473,6 +561,7 @@
             reversedTrades.forEach((trade, index) => {
                 const pnlClass = trade.pnl_percent >= 0 ? 'pnl-positive' : 'pnl-negative';
                 const sideClass = trade.side === 'LONG' ? 'side-long' : 'side-short';
+                const pnlUsd = positionSize * trade.pnl_percent / 100;
 
                 html += `
                     <tr>
@@ -484,6 +573,9 @@
                         <td>$${formatNumber(trade.exit_price, 4)}</td>
                         <td class="${pnlClass}">
                             ${trade.pnl_percent >= 0 ? '+' : ''}${formatNumber(trade.pnl_percent)}%
+                        </td>
+                        <td class="${pnlClass}">
+                            ${formatUSD(pnlUsd)}
                         </td>
                     </tr>
                 `;
@@ -501,6 +593,7 @@
                 }
 
                 const data = await response.json();
+                currentData = data;
 
                 // Status aktualisieren
                 document.getElementById('statusDot').className = 'status-dot live';
@@ -519,25 +612,52 @@
 
                 // Stats aktualisieren
                 const stats = data.stats || {};
+                const positionSize = stats.position_size || 500;
+                const totalPnlUsd = stats.total_pnl_usd || 0;
                 const totalPnl = stats.total_pnl || 0;
-                document.getElementById('totalPnl').textContent = (totalPnl >= 0 ? '+' : '') + formatNumber(totalPnl) + '%';
-                document.getElementById('totalPnl').className = 'stat-value ' + (totalPnl >= 0 ? 'positive' : 'negative');
 
+                // Big PnL
+                const bigPnl = document.getElementById('bigPnl');
+                bigPnl.textContent = formatUSD(totalPnlUsd);
+                bigPnl.className = 'big-pnl ' + (totalPnlUsd >= 0 ? 'pnl-positive' : 'pnl-negative');
+
+                document.getElementById('pnlPercent').textContent = (totalPnl >= 0 ? '+' : '') + formatNumber(totalPnl) + '%';
+                document.getElementById('tradeCount').textContent = (stats.total_trades || 0) + ' Trades';
+                document.getElementById('winRateSmall').textContent = formatNumber(stats.win_rate || 0, 1) + '%';
+
+                // Stats Grid
                 document.getElementById('winRate').textContent = formatNumber(stats.win_rate || 0, 1) + '%';
-                document.getElementById('totalTrades').textContent = stats.total_trades || 0;
-                document.getElementById('avgWin').textContent = '+' + formatNumber(stats.avg_win || 0) + '%';
-                document.getElementById('avgLoss').textContent = formatNumber(stats.avg_loss || 0) + '%';
-                document.getElementById('winsLosses').textContent = `${stats.wins || 0} / ${stats.losses || 0}`;
+
+                // Profit Factor berechnen
+                const totalWins = (stats.avg_win || 0) * (stats.wins || 0);
+                const totalLosses = Math.abs(stats.avg_loss || 0) * (stats.losses || 0);
+                const profitFactor = totalLosses > 0 ? (totalWins / totalLosses) : (totalWins > 0 ? 999 : 0);
+                const pfElement = document.getElementById('profitFactor');
+                pfElement.textContent = formatNumber(profitFactor, 2);
+                pfElement.className = 'stat-value ' + (profitFactor >= 1.5 ? 'positive' : profitFactor >= 1 ? 'neutral' : 'negative');
+
+                document.getElementById('avgWin').textContent = formatUSD(stats.avg_win_usd || 0);
+                document.getElementById('avgWinPct').textContent = '+' + formatNumber(stats.avg_win || 0) + '%';
+
+                document.getElementById('avgLoss').textContent = formatUSD(stats.avg_loss_usd || 0);
+                document.getElementById('avgLossPct').textContent = formatNumber(stats.avg_loss || 0) + '%';
+
+                document.getElementById('bestTrade').textContent = formatUSD(stats.best_trade_usd || 0);
+                document.getElementById('bestTradePct').textContent = '+' + formatNumber(stats.best_trade || 0) + '%';
+
+                document.getElementById('worstTrade').textContent = formatUSD(stats.worst_trade_usd || 0);
+                document.getElementById('worstTradePct').textContent = formatNumber(stats.worst_trade || 0) + '%';
 
                 // Positionen aktualisieren
-                updatePositions(data.positions);
+                updatePositions(data.positions, positionSize);
 
                 // Trades aktualisieren
-                updateTrades(data.trade_history);
+                updateTrades(data.trade_history, positionSize);
 
                 // Plotly Chart aktualisieren
-                if (stats.equity_curve && stats.equity_curve.length > 0) {
-                    updatePlotlyChart(stats.equity_curve, data.trade_history);
+                if ((stats.equity_curve && stats.equity_curve.length > 0) ||
+                    (stats.equity_curve_usd && stats.equity_curve_usd.length > 0)) {
+                    updatePlotlyChart(stats, data.trade_history);
                 }
 
                 // Notification bei neuem Trade

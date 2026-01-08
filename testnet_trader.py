@@ -1230,7 +1230,9 @@ class BinanceTestnetTrader:
         return sorted(signals, key=lambda x: abs(x["change_percent"]), reverse=True)[:limit]
 
     def get_trading_stats(self) -> dict:
-        """Berechnet Trading-Statistiken"""
+        """Berechnet Trading-Statistiken in % und USD"""
+        position_size = config.MAX_POSITION_SIZE
+
         if not self.trade_history:
             return {
                 "total_trades": 0,
@@ -1238,11 +1240,18 @@ class BinanceTestnetTrader:
                 "losses": 0,
                 "win_rate": 0.0,
                 "total_pnl": 0.0,
+                "total_pnl_usd": 0.0,
                 "avg_win": 0.0,
                 "avg_loss": 0.0,
+                "avg_win_usd": 0.0,
+                "avg_loss_usd": 0.0,
                 "best_trade": 0.0,
                 "worst_trade": 0.0,
-                "equity_curve": []
+                "best_trade_usd": 0.0,
+                "worst_trade_usd": 0.0,
+                "equity_curve": [],
+                "equity_curve_usd": [],
+                "position_size": position_size
             }
 
         wins = [t for t in self.trade_history if t["pnl_percent"] > 0]
@@ -1254,12 +1263,18 @@ class BinanceTestnetTrader:
         best_trade = max(t["pnl_percent"] for t in self.trade_history) if self.trade_history else 0.0
         worst_trade = min(t["pnl_percent"] for t in self.trade_history) if self.trade_history else 0.0
 
-        # Equity Curve berechnen (kumulative PnL)
+        # Equity Curve berechnen (kumulative PnL in % und USD)
         equity_curve = []
+        equity_curve_usd = []
         cumulative = 0.0
+        cumulative_usd = 0.0
         for t in self.trade_history:
             cumulative += t["pnl_percent"]
+            # USD = Position Size * PnL% / 100
+            pnl_usd = position_size * t["pnl_percent"] / 100
+            cumulative_usd += pnl_usd
             equity_curve.append(cumulative)
+            equity_curve_usd.append(cumulative_usd)
 
         return {
             "total_trades": len(self.trade_history),
@@ -1267,11 +1282,18 @@ class BinanceTestnetTrader:
             "losses": len(losses),
             "win_rate": len(wins) / len(self.trade_history) * 100 if self.trade_history else 0.0,
             "total_pnl": total_pnl,
+            "total_pnl_usd": position_size * total_pnl / 100,
             "avg_win": avg_win,
             "avg_loss": avg_loss,
+            "avg_win_usd": position_size * avg_win / 100,
+            "avg_loss_usd": position_size * avg_loss / 100,
             "best_trade": best_trade,
             "worst_trade": worst_trade,
-            "equity_curve": equity_curve
+            "best_trade_usd": position_size * best_trade / 100,
+            "worst_trade_usd": position_size * worst_trade / 100,
+            "equity_curve": equity_curve,
+            "equity_curve_usd": equity_curve_usd,
+            "position_size": position_size
         }
 
     def show_trade_history(self, limit: int = 10):
