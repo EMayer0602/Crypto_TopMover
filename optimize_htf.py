@@ -389,7 +389,7 @@ class HTFOptimizer:
         Returns: Beste Settings + Performance
         """
         # Lade Daten (still wenn fehlgeschlagen)
-        klines = self.get_klines(symbol, timeframe, 500)
+        klines = self.get_klines(symbol, timeframe, 1000)
         if len(klines) < 100:
             # Überspringe leise - kein Spam bei 280 Symbolen
             return {}
@@ -417,8 +417,8 @@ class HTFOptimizer:
                             kama_period, jma_period
                         )
 
-                        # Bewertung: Win Rate * Anzahl Trades (mindestens 10 Trades)
-                        if result["trades"] >= 10:
+                        # Bewertung: Win Rate * Anzahl Trades (mindestens 5 Trades)
+                        if result["trades"] >= 5:
                             score = result["win_rate"] * (1 + result["avg_pnl"] / 10)
 
                             if best_result is None or score > best_result.get("score", 0):
