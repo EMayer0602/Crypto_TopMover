@@ -229,12 +229,45 @@ class BinanceTestnetTrader:
         self.trade_history = []
         self.state_file = "testnet_state.json"
         self.filter_stats = FilterStats()  # Filter-Statistiken
+        self.symbol_settings = self._load_symbol_settings()  # Optimierte Settings pro Symbol
         self._load_state()
 
         # Prüfe ob Keys vorhanden
         if not self.api_key or not self.api_secret:
             print("⚠️  WARNUNG: Keine Testnet API Keys in .env!")
             print("   Hole dir Keys von: https://testnet.binancefuture.com")
+
+    def _load_symbol_settings(self) -> Dict:
+        """Lädt optimierte Settings pro Symbol"""
+        settings = {}
+
+        # Versuche verschiedene Settings-Dateien zu laden
+        for filename in ["symbol_settings.json", "symbol_settings_1h.json", "symbol_settings_15m.json"]:
+            if os.path.exists(filename):
+                try:
+                    with open(filename, "r") as f:
+                        file_settings = json.load(f)
+                        # Merge (neuere überschreiben)
+                        settings.update(file_settings)
+                        print(f"  Loaded {len(file_settings)} symbol settings from {filename}")
+                except Exception as e:
+                    print(f"  Warning: Could not load {filename}: {e}")
+
+        return settings
+
+    def get_symbol_settings(self, symbol: str) -> Dict:
+        """Holt optimierte Settings für ein Symbol (oder Default)"""
+        if symbol in self.symbol_settings:
+            return self.symbol_settings[symbol]
+
+        # Default Settings aus config
+        return {
+            "supertrend_period": config.ENTRY_SUPERTREND_PERIOD,
+            "supertrend_multiplier": config.ENTRY_SUPERTREND_MULTIPLIER,
+            "kama_period": config.KAMA_PERIOD,
+            "jma_period": config.JMA_PERIOD,
+            "timeframe": config.ENTRY_SUPERTREND_TIMEFRAME
+        }
 
     def _sign(self, params: dict) -> str:
         """Erstellt HMAC SHA256 Signatur"""
@@ -1006,31 +1039,38 @@ class BinanceTestnetTrader:
         """
         Prüft ob Supertrend einen Entry erlaubt (verhindert Chasing nach Pump).
         DYNAMISCH: Verwendet ATR statt fester Prozente - passt sich an Volatilität an.
+        Nutzt Symbol-spezifische Settings wenn verfügbar.
         Returns: (erlaubt, grund)
         """
         if not config.USE_SUPERTREND_ENTRY_FILTER:
             return (True, "Supertrend Entry Filter deaktiviert")
 
-        # Hole 5min Klines für Entry-Check
-        limit = config.ENTRY_SUPERTREND_PERIOD * 3 + 10
-        klines = self.get_klines(symbol, config.ENTRY_SUPERTREND_TIMEFRAME, limit)
+        # Symbol-spezifische Settings holen
+        settings = self.get_symbol_settings(symbol)
+        st_period = settings.get("supertrend_period", config.ENTRY_SUPERTREND_PERIOD)
+        st_mult = settings.get("supertrend_multiplier", config.ENTRY_SUPERTREND_MULTIPLIER)
+        timeframe = settings.get("timeframe", config.ENTRY_SUPERTREND_TIMEFRAME)
 
-        if len(klines) < config.ENTRY_SUPERTREND_PERIOD + 2:
+        # Hole Klines für Entry-Check
+        limit = st_period * 3 + 10
+        klines = self.get_klines(symbol, timeframe, limit)
+
+        if len(klines) < st_period + 2:
             return (True, "Nicht genug Daten für Supertrend")
 
         # Berechne ATR für dynamische Schwelle
-        atr_values = self.calculate_atr(klines, config.ENTRY_SUPERTREND_PERIOD)
+        atr_values = self.calculate_atr(klines, st_period)
         if not atr_values or atr_values[-1] is None:
             return (True, "ATR nicht verfügbar")
 
         current_atr = atr_values[-1]
         current_price = klines[-1]["close"]
 
-        # Berechne Supertrend
+        # Berechne Supertrend mit Symbol-spezifischen Settings
         st = self.calculate_supertrend(
             klines,
-            config.ENTRY_SUPERTREND_PERIOD,
-            config.ENTRY_SUPERTREND_MULTIPLIER
+            st_period,
+            st_mult
         )
 
         if st["direction"] == "NEUTRAL" or st["value"] == 0:
@@ -1069,20 +1109,26 @@ class BinanceTestnetTrader:
         """
         Prüft ob KAMA (Kaufman Adaptive Moving Average) einen Entry erlaubt.
         KAMA passt sich der Marktvolatilität an - smooth in Seitwärtsmärkten, reaktiv in Trends.
+        Nutzt Symbol-spezifische Settings wenn verfügbar.
         Returns: (erlaubt, grund)
         """
         if not config.USE_KAMA_FILTER:
             return (True, "KAMA Filter deaktiviert")
 
+        # Symbol-spezifische Settings holen
+        settings = self.get_symbol_settings(symbol)
+        kama_period = settings.get("kama_period", config.KAMA_PERIOD)
+        timeframe = settings.get("timeframe", config.KAMA_TIMEFRAME)
+
         # Hole Klines
-        klines = self.get_klines(symbol, config.KAMA_TIMEFRAME, config.KAMA_PERIOD + 50)
-        if len(klines) < config.KAMA_PERIOD + 10:
+        klines = self.get_klines(symbol, timeframe, kama_period + 50)
+        if len(klines) < kama_period + 10:
             return (True, "Nicht genug Daten für KAMA")
 
-        # Berechne KAMA
+        # Berechne KAMA mit Symbol-spezifischen Settings
         kama_result = self.calculate_kama(
             klines,
-            config.KAMA_PERIOD,
+            kama_period,
             config.KAMA_FAST,
             config.KAMA_SLOW
         )
@@ -1107,20 +1153,26 @@ class BinanceTestnetTrader:
         """
         Prüft ob JMA (Jurik Moving Average) einen Entry erlaubt.
         JMA ist sehr smooth mit wenig Lag - gut für Trendbestätigung.
+        Nutzt Symbol-spezifische Settings wenn verfügbar.
         Returns: (erlaubt, grund)
         """
         if not config.USE_JMA_FILTER:
             return (True, "JMA Filter deaktiviert")
 
+        # Symbol-spezifische Settings holen
+        settings = self.get_symbol_settings(symbol)
+        jma_period = settings.get("jma_period", config.JMA_PERIOD)
+        timeframe = settings.get("timeframe", config.JMA_TIMEFRAME)
+
         # Hole Klines
-        klines = self.get_klines(symbol, config.JMA_TIMEFRAME, config.JMA_PERIOD + 50)
-        if len(klines) < config.JMA_PERIOD + 10:
+        klines = self.get_klines(symbol, timeframe, jma_period + 50)
+        if len(klines) < jma_period + 10:
             return (True, "Nicht genug Daten für JMA")
 
-        # Berechne JMA
+        # Berechne JMA mit Symbol-spezifischen Settings
         jma_result = self.calculate_jma(
             klines,
-            config.JMA_PERIOD,
+            jma_period,
             config.JMA_PHASE
         )
 
