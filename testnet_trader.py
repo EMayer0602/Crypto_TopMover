@@ -30,6 +30,189 @@ class TestnetPosition:
     partial_closed: bool = False  # Partial TP bereits genommen
 
 
+@dataclass
+class BlockedTrade:
+    """Ein durch Filter geblockter Trade zur Nachverfolgung"""
+    symbol: str
+    side: str
+    filter_name: str
+    block_price: float
+    block_time: str
+    checked: bool = False
+    outcome_price: float = 0.0
+    would_be_winner: bool = False
+
+
+class FilterStats:
+    """Trackt Filter-Performance"""
+
+    def __init__(self, stats_file: str = "filter_stats.json"):
+        self.stats_file = stats_file
+        self.blocked_trades: List[BlockedTrade] = []
+        self.filter_counts = {
+            "volume": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "funding": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "rsi": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "trend": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "supertrend_entry": {"blocked": 0, "would_win": 0, "would_lose": 0},
+        }
+        self.passed_trades = {"total": 0, "wins": 0, "losses": 0}
+        self._load_stats()
+
+    def _load_stats(self):
+        """Lädt gespeicherte Statistiken"""
+        if os.path.exists(self.stats_file):
+            try:
+                with open(self.stats_file, "r") as f:
+                    data = json.load(f)
+                    self.filter_counts = data.get("filter_counts", self.filter_counts)
+                    self.passed_trades = data.get("passed_trades", self.passed_trades)
+                    self.blocked_trades = [
+                        BlockedTrade(**bt) for bt in data.get("blocked_trades", [])
+                    ]
+            except Exception as e:
+                print(f"⚠️  Konnte Filter-Stats nicht laden: {e}")
+
+    def _save_stats(self):
+        """Speichert Statistiken"""
+        try:
+            with open(self.stats_file, "w") as f:
+                json.dump({
+                    "filter_counts": self.filter_counts,
+                    "passed_trades": self.passed_trades,
+                    "blocked_trades": [
+                        {
+                            "symbol": bt.symbol,
+                            "side": bt.side,
+                            "filter_name": bt.filter_name,
+                            "block_price": bt.block_price,
+                            "block_time": bt.block_time,
+                            "checked": bt.checked,
+                            "outcome_price": bt.outcome_price,
+                            "would_be_winner": bt.would_be_winner,
+                        }
+                        for bt in self.blocked_trades[-100:]  # Nur letzte 100 behalten
+                    ]
+                }, f, indent=2)
+        except Exception as e:
+            print(f"⚠️  Konnte Filter-Stats nicht speichern: {e}")
+
+    def record_blocked(self, symbol: str, side: str, filter_name: str, price: float):
+        """Zeichnet geblockten Trade auf"""
+        self.blocked_trades.append(BlockedTrade(
+            symbol=symbol,
+            side=side,
+            filter_name=filter_name,
+            block_price=price,
+            block_time=datetime.now().isoformat()
+        ))
+        if filter_name in self.filter_counts:
+            self.filter_counts[filter_name]["blocked"] += 1
+        self._save_stats()
+
+    def record_trade_result(self, is_winner: bool):
+        """Zeichnet Ergebnis eines durchgelassenen Trades auf"""
+        self.passed_trades["total"] += 1
+        if is_winner:
+            self.passed_trades["wins"] += 1
+        else:
+            self.passed_trades["losses"] += 1
+        self._save_stats()
+
+    def check_blocked_outcomes(self, get_price_func, tp_percent: float = 4.0, sl_percent: float = 2.0):
+        """Prüft Outcome der geblockten Trades"""
+        for bt in self.blocked_trades:
+            if bt.checked:
+                continue
+
+            # Nur Trades prüfen die älter als 4 Stunden sind
+            block_time = datetime.fromisoformat(bt.block_time)
+            hours_passed = (datetime.now() - block_time).total_seconds() / 3600
+            if hours_passed < 4:
+                continue
+
+            current_price = get_price_func(bt.symbol)
+            if not current_price:
+                continue
+
+            bt.outcome_price = current_price
+            bt.checked = True
+
+            # Berechne ob es ein Gewinner gewesen wäre
+            if bt.side == "LONG":
+                pnl = (current_price - bt.block_price) / bt.block_price * 100
+            else:  # SHORT
+                pnl = (bt.block_price - current_price) / bt.block_price * 100
+
+            # Vereinfachte Logik: Gewinner wenn > 2%, Verlierer wenn < -1%
+            bt.would_be_winner = pnl >= 2.0
+
+            if bt.filter_name in self.filter_counts:
+                if bt.would_be_winner:
+                    self.filter_counts[bt.filter_name]["would_win"] += 1
+                elif pnl <= -1.0:
+                    self.filter_counts[bt.filter_name]["would_lose"] += 1
+
+        self._save_stats()
+
+    def get_summary(self) -> str:
+        """Gibt Statistik-Zusammenfassung zurück"""
+        lines = [
+            "",
+            "📊 FILTER STATISTIKEN",
+            "━" * 50,
+        ]
+
+        for filter_name, counts in self.filter_counts.items():
+            blocked = counts["blocked"]
+            if blocked == 0:
+                continue
+
+            would_win = counts["would_win"]
+            would_lose = counts["would_lose"]
+            checked = would_win + would_lose
+
+            if checked > 0:
+                win_rate = would_win / checked * 100
+                verdict = "⚠️ blockt Gewinner!" if win_rate > 40 else "✓ spart Verluste"
+            else:
+                win_rate = 0
+                verdict = "⏳ noch keine Daten"
+
+            filter_display = filter_name.replace("_", " ").title()
+            lines.append(
+                f"  {filter_display:20} │ {blocked:3} geblockt │ "
+                f"{would_win}/{checked} wären Gewinner ({win_rate:.0f}%) {verdict}"
+            )
+
+        lines.append("━" * 50)
+
+        total = self.passed_trades["total"]
+        wins = self.passed_trades["wins"]
+        if total > 0:
+            win_rate = wins / total * 100
+            lines.append(f"  Durchgelassene Trades: {total} │ Win Rate: {win_rate:.1f}%")
+        else:
+            lines.append("  Noch keine abgeschlossenen Trades")
+
+        lines.append("")
+        return "\n".join(lines)
+
+    def reset(self):
+        """Setzt alle Statistiken zurück"""
+        self.blocked_trades = []
+        self.filter_counts = {
+            "volume": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "funding": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "rsi": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "trend": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "supertrend_entry": {"blocked": 0, "would_win": 0, "would_lose": 0},
+        }
+        self.passed_trades = {"total": 0, "wins": 0, "losses": 0}
+        self._save_stats()
+        print("🔄 Filter-Statistiken zurückgesetzt")
+
+
 class BinanceTestnetTrader:
     """Trader für Binance Testnet"""
 
@@ -41,6 +224,7 @@ class BinanceTestnetTrader:
         self.positions: Dict[str, TestnetPosition] = {}
         self.trade_history = []
         self.state_file = "testnet_state.json"
+        self.filter_stats = FilterStats()  # Filter-Statistiken
         self._load_state()
 
         # Prüfe ob Keys vorhanden
@@ -633,7 +817,9 @@ class BinanceTestnetTrader:
                         print(f"🔔 TRAILING STOP für LONG {pos.symbol} ({pnl_at_close:+.2f}%)")
                         print(f"   Peak: ${pos.peak_price:.4f} → Stop: ${trailing_stop_level:.4f} → Aktuell: ${current_price:.4f}")
                         result = self.futures_close_long(pos.symbol)
-                        if not result:
+                        if result:
+                            self.filter_stats.record_trade_result(pnl_at_close > 0)
+                        else:
                             print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
                         continue
 
@@ -652,12 +838,16 @@ class BinanceTestnetTrader:
                 if pnl >= config.TAKE_PROFIT_PERCENT:
                     print(f"📈 TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
                     result = self.futures_close_long(pos.symbol)
-                    if not result:
+                    if result:
+                        self.filter_stats.record_trade_result(True)  # TP = Winner
+                    else:
                         print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
                 elif pnl <= -config.STOP_LOSS_PERCENT:
                     print(f"📉 SL erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
                     result = self.futures_close_long(pos.symbol)
-                    if not result:
+                    if result:
+                        self.filter_stats.record_trade_result(False)  # SL = Loser
+                    else:
                         print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
 
             elif pos.side == "SHORT":
@@ -684,7 +874,9 @@ class BinanceTestnetTrader:
                         print(f"🔔 TRAILING STOP für SHORT {pos.symbol} ({pnl_at_close:+.2f}%)")
                         print(f"   Low: ${pos.peak_price:.4f} → Stop: ${trailing_stop_level:.4f} → Aktuell: ${current_price:.4f}")
                         result = self.futures_close_short(pos.symbol)
-                        if not result:
+                        if result:
+                            self.filter_stats.record_trade_result(pnl_at_close > 0)
+                        else:
                             print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
                         continue
 
@@ -703,12 +895,16 @@ class BinanceTestnetTrader:
                 if pnl >= config.SHORT_TAKE_PROFIT:
                     print(f"📈 TP erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
                     result = self.futures_close_short(pos.symbol)
-                    if not result:
+                    if result:
+                        self.filter_stats.record_trade_result(True)  # TP = Winner
+                    else:
                         print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
                 elif pnl <= -config.SHORT_STOP_LOSS:
                     print(f"📉 SL erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
                     result = self.futures_close_short(pos.symbol)
-                    if not result:
+                    if result:
+                        self.filter_stats.record_trade_result(False)  # SL = Loser
+                    else:
                         print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
 
     def _get_spot_price(self, symbol: str) -> Optional[float]:
@@ -2031,6 +2227,7 @@ def run_testnet_auto_trading():
                             trend = trader.check_trend_consistency(coin["symbol"])
                             if trend == "DOWN":
                                 print(f"  ⏭️  Skip {coin['base']} - im Downtrend (kein Mean Reversion)")
+                                trader.filter_stats.record_blocked(coin["symbol"], "LONG", "trend", coin["price"])
                                 continue
 
                         # RSI Filter: Nur kaufen wenn überverkauft
@@ -2038,6 +2235,7 @@ def run_testnet_auto_trading():
                             rsi_ok, rsi_reason = trader.check_rsi_entry(coin["symbol"], "LONG")
                             if not rsi_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "LONG", "rsi", coin["price"])
                                 continue
 
                         # Supertrend Entry Filter: Nicht einsteigen wenn zu weit über ST (Chasing)
@@ -2045,6 +2243,7 @@ def run_testnet_auto_trading():
                             st_ok, st_reason = trader.check_supertrend_entry(coin["symbol"], "LONG")
                             if not st_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "LONG", "supertrend_entry", coin["price"])
                                 continue
 
                         # Volume Filter: Nur bei überdurchschnittlichem Volume
@@ -2052,6 +2251,7 @@ def run_testnet_auto_trading():
                             vol_ok, vol_reason = trader.check_volume_filter(coin["symbol"])
                             if not vol_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {vol_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "LONG", "volume", coin["price"])
                                 continue
 
                         # Funding Rate Filter: Contrarian bei extremer Funding
@@ -2059,6 +2259,7 @@ def run_testnet_auto_trading():
                             fund_ok, fund_reason = trader.check_funding_rate_filter(coin["symbol"], "LONG")
                             if not fund_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {fund_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "LONG", "funding", coin["price"])
                                 continue
 
                         print(f"\n[{timestamp}] 📉 MEAN REV LONG: {coin['base']} @ {coin['change_percent']:.1f}%")
@@ -2077,6 +2278,7 @@ def run_testnet_auto_trading():
                             trend = trader.check_trend_consistency(coin["symbol"])
                             if trend == "UP":
                                 print(f"  ⏭️  Skip {coin['base']} - im Uptrend (kein Mean Reversion)")
+                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "trend", coin["price"])
                                 continue
 
                         # RSI Filter: Nur shorten wenn überkauft
@@ -2084,6 +2286,7 @@ def run_testnet_auto_trading():
                             rsi_ok, rsi_reason = trader.check_rsi_entry(coin["symbol"], "SHORT")
                             if not rsi_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "rsi", coin["price"])
                                 continue
 
                         # Supertrend Entry Filter: Nicht einsteigen wenn zu weit unter ST (Chasing)
@@ -2091,6 +2294,7 @@ def run_testnet_auto_trading():
                             st_ok, st_reason = trader.check_supertrend_entry(coin["symbol"], "SHORT")
                             if not st_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "supertrend_entry", coin["price"])
                                 continue
                             print(f"  ✓ ST Entry: {st_reason}")
 
@@ -2099,6 +2303,7 @@ def run_testnet_auto_trading():
                             vol_ok, vol_reason = trader.check_volume_filter(coin["symbol"])
                             if not vol_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {vol_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "volume", coin["price"])
                                 continue
 
                         # Funding Rate Filter: Contrarian bei extremer Funding
@@ -2106,6 +2311,7 @@ def run_testnet_auto_trading():
                             fund_ok, fund_reason = trader.check_funding_rate_filter(coin["symbol"], "SHORT")
                             if not fund_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {fund_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "funding", coin["price"])
                                 continue
 
                         print(f"\n[{timestamp}] 📈 MEAN REV SHORT: {coin['base']} @ +{coin['change_percent']:.1f}%")
@@ -2121,10 +2327,22 @@ def run_testnet_auto_trading():
             # 5. Dashboard aktualisieren
             trader.export_dashboard_data()
 
+            # 6. Filter-Stats: Blocked Trades nach 4h auswerten
+            trader.filter_stats.check_blocked_outcomes(trader._get_futures_price)
+
+            # 7. Filter-Stats alle 10 Zyklen anzeigen
+            if not hasattr(trader, '_stats_cycle'):
+                trader._stats_cycle = 0
+            trader._stats_cycle += 1
+            if trader._stats_cycle >= 10:
+                print(trader.filter_stats.get_summary())
+                trader._stats_cycle = 0
+
             time.sleep(config.SCAN_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
         print("\n\n⏹️  Auto-Trading beendet.")
+        print(trader.filter_stats.get_summary())
         trader.show_status()
 
 
@@ -2150,6 +2368,20 @@ if __name__ == "__main__":
             import subprocess
             subprocess.run([sys.executable, "analyze_peaks.py"])
 
+        elif mode == "stats":
+            print("\n" + "="*60)
+            print("  FILTER STATISTIKEN")
+            print("="*60)
+            stats = FilterStats()
+            print(stats.get_summary())
+
+        elif mode == "resetstats":
+            print("\n" + "="*60)
+            print("  STATISTIKEN ZURÜCKSETZEN")
+            print("="*60)
+            stats = FilterStats()
+            stats.reset()
+
         elif mode == "help":
             print("\n" + "="*60)
             print("  CRYPTO TOPMOVER - HILFE")
@@ -2158,6 +2390,8 @@ if __name__ == "__main__":
             print("    python testnet_trader.py           → Live Trading")
             print("    python testnet_trader.py backtest  → Backtest starten")
             print("    python testnet_trader.py analyze   → Peak-Analyse")
+            print("    python testnet_trader.py stats     → Filter-Statistiken anzeigen")
+            print("    python testnet_trader.py resetstats → Statistiken zurücksetzen")
             print("    python testnet_trader.py help      → Diese Hilfe")
             print("\n  Config (config.py):")
             print("    FEAR_GREED_MODE = 'MOMENTUM'    → Greed=Longs, Fear=Shorts")
