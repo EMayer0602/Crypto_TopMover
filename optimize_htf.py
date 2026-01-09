@@ -130,14 +130,16 @@ class HTFOptimizer:
         direction = []
 
         for i in range(len(klines)):
-            if i < period or atr_values[i] is None:
+            # ATR hat einen Offset von 1 (braucht prev close)
+            atr_idx = i - 1
+            if i < period or atr_idx < 0 or atr_idx >= len(atr_values) or atr_values[atr_idx] is None:
                 results.append({"value": None, "direction": "NEUTRAL"})
                 supertrend.append(None)
                 direction.append(0)
                 continue
 
             hl2 = (klines[i]["high"] + klines[i]["low"]) / 2
-            atr = atr_values[i]
+            atr = atr_values[atr_idx]
 
             basic_upper = hl2 + multiplier * atr
             basic_lower = hl2 - multiplier * atr
