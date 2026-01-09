@@ -295,16 +295,26 @@ class HTFOptimizer:
         trades = []
         position = None  # {"side": "LONG/SHORT", "entry_price": x, "entry_idx": i}
 
+        # Minimale Länge aller Arrays
+        min_len = min(len(st_results), len(kama_results), len(jma_results), len(klines))
+        start_idx = max(st_period, kama_period, jma_period) + 1
+
         # Simuliere Trades
-        for i in range(max(st_period, kama_period, jma_period) + 1, len(klines)):
+        for i in range(start_idx, min_len):
             close = klines[i]["close"]
+
+            # Bounds check
+            if i >= len(st_results) or i >= len(kama_results) or i >= len(jma_results):
+                continue
 
             st = st_results[i]
             kama = kama_results[i]
             jma = jma_results[i]
 
             # Skip wenn Indikatoren nicht verfügbar
-            if st["direction"] == "NEUTRAL" or kama["trend"] == "NEUTRAL":
+            if st is None or kama is None or jma is None:
+                continue
+            if st.get("direction") == "NEUTRAL" or kama.get("trend") == "NEUTRAL":
                 continue
 
             # Position Management
@@ -340,12 +350,16 @@ class HTFOptimizer:
 
             # Entry Signale (nur wenn keine Position)
             if not position:
+                st_dir = st.get("direction", "NEUTRAL")
+                kama_trend = kama.get("trend", "NEUTRAL")
+                jma_trend = jma.get("trend", "NEUTRAL")
+
                 # LONG: ST UP + KAMA UP + JMA nicht DOWN
-                if st["direction"] == "UP" and kama["trend"] == "UP" and jma["trend"] != "DOWN":
+                if st_dir == "UP" and kama_trend == "UP" and jma_trend != "DOWN":
                     position = {"side": "LONG", "entry_price": close, "entry_idx": i}
 
                 # SHORT: ST DOWN + KAMA DOWN + JMA nicht UP
-                elif st["direction"] == "DOWN" and kama["trend"] == "DOWN" and jma["trend"] != "UP":
+                elif st_dir == "DOWN" and kama_trend == "DOWN" and jma_trend != "UP":
                     position = {"side": "SHORT", "entry_price": close, "entry_idx": i}
 
         # Berechne Metriken
