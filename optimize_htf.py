@@ -700,12 +700,56 @@ def autofix_filters():
     stats_file = "filter_stats.json"
     if not os.path.exists(stats_file):
         print(f"\n  ❌ {stats_file} nicht gefunden!")
+        print("  Der Trader muss erst laufen um Statistiken zu sammeln.")
+        print("  Starte: python testnet_trader.py")
         return
 
     with open(stats_file, "r") as f:
         data = json.load(f)
 
     filter_counts = data.get("filter_counts", {})
+    blocked_trades = data.get("blocked_trades", [])
+
+    # Zeige aktuelle Statistiken
+    print(f"\n  📊 AKTUELLE STATISTIKEN:")
+    print(f"  " + "-"*56)
+
+    if not filter_counts:
+        print(f"  ⚠️  Keine Filter-Daten vorhanden!")
+        print(f"  Der Trader muss erst einige Trades blocken.")
+        print(f"  Warte mindestens 1-2 Stunden Trading-Zeit.")
+        return
+
+    total_blocked = 0
+    total_checked = 0
+
+    # Zeige Details pro Filter
+    for filter_name, counts in filter_counts.items():
+        blocked = counts.get("blocked", 0)
+        would_win = counts.get("would_win", 0)
+        would_lose = counts.get("would_lose", 0)
+        checked = would_win + would_lose
+        total_blocked += blocked
+        total_checked += checked
+
+        print(f"\n  {filter_name.upper().replace('_', ' ')}:")
+        print(f"    Geblockt: {blocked}")
+        if checked > 0:
+            win_rate = would_win / checked * 100
+            print(f"    Geprüft: {checked} (nach 4h Wartezeit)")
+            print(f"    Wären Gewinner: {would_win} ({win_rate:.0f}%)")
+            print(f"    Wären Verlierer: {would_lose} ({100-win_rate:.0f}%)")
+        else:
+            print(f"    Geprüft: 0 (braucht 4h für Outcome-Check)")
+
+    print(f"\n  " + "-"*56)
+    print(f"  GESAMT: {total_blocked} geblockt, {total_checked} geprüft")
+
+    if total_checked < 5:
+        print(f"\n  ⚠️  Zu wenig Daten für Analyse!")
+        print(f"  Mindestens 5 geprüfte Trades nötig (aktuell: {total_checked})")
+        print(f"  Warte bis mehr Trades geprüft wurden (4h nach Block).")
+        return
 
     # Finde Filter die deaktiviert werden sollten
     to_disable = []
@@ -715,7 +759,7 @@ def autofix_filters():
         would_lose = counts.get("would_lose", 0)
         checked = would_win + would_lose
 
-        if blocked > 0 and checked > 5:  # Mindestens 5 geprüfte Trades
+        if blocked > 0 and checked >= 3:  # Mindestens 3 geprüfte Trades
             win_rate = would_win / checked * 100
             if win_rate > 50:  # Blockt mehr als 50% Gewinner
                 config_key = f"USE_{filter_name.upper()}_FILTER"
@@ -724,8 +768,14 @@ def autofix_filters():
                 to_disable.append({
                     "filter": filter_name,
                     "config_key": config_key,
-                    "win_rate": win_rate
+                    "win_rate": win_rate,
+                    "blocked": blocked,
+                    "checked": checked
                 })
+
+    # Empfehlungen ausgeben
+    print(f"\n  " + "-"*56)
+    print(f"  EMPFEHLUNG:")
 
     if not to_disable:
         print("\n  ✅ Alle Filter sind nützlich - keine Änderungen nötig!")
