@@ -432,8 +432,15 @@ class HTFOptimizer:
                                 }
 
         if best_result and best_settings:
+            win_rate = best_result['win_rate']
+
+            # Nur Symbole mit >50% Win Rate speichern
+            if win_rate < 50:
+                print(f"skip (WinRate {win_rate:.0f}% < 50%)")
+                return {}
+
             # Kompakte Ausgabe
-            print(f"WinRate={best_result['win_rate']:.0f}% PnL={best_result['total_pnl']:.1f}% ({best_result['trades']} trades)")
+            print(f"WinRate={win_rate:.0f}% PnL={best_result['total_pnl']:.1f}% ({best_result['trades']} trades)")
 
             return {
                 "symbol": symbol,
@@ -582,6 +589,155 @@ def get_futures_symbols() -> List[str]:
 def get_active_symbols() -> List[str]:
     """Alias für Kompatibilität - verwendet jetzt Futures Symbole"""
     return get_futures_symbols()
+
+
+def backtest_filter_combinations():
+    """
+    Testet verschiedene Filter-Kombinationen per Backtest.
+    Zeigt welche Kombination am besten performed.
+    """
+    print("\n" + "="*60)
+    print("  FILTER-KOMBINATIONS-ANALYSE (Backtest)")
+    print("  Testet welche Filter-Kombination am besten ist")
+    print("="*60)
+
+    optimizer = HTFOptimizer()
+
+    # Test-Symbole (diverse Marktbedingungen)
+    test_symbols = [
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT",
+        "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT"
+    ]
+
+    # Filter-Kombinationen zum Testen
+    combinations = [
+        {"name": "Nur Supertrend", "st": True, "kama": False, "jma": False},
+        {"name": "ST + KAMA", "st": True, "kama": True, "jma": False},
+        {"name": "ST + JMA", "st": True, "kama": False, "jma": True},
+        {"name": "ST + KAMA + JMA", "st": True, "kama": True, "jma": True},
+        {"name": "Nur KAMA", "st": False, "kama": True, "jma": False},
+        {"name": "KAMA + JMA", "st": False, "kama": True, "jma": True},
+    ]
+
+    print(f"\n  Lade Daten für {len(test_symbols)} Symbole...")
+
+    # Sammle Klines für alle Symbole
+    all_klines = {}
+    for symbol in test_symbols:
+        klines = optimizer.get_klines(symbol, "1h", 1000)
+        if len(klines) >= 100:
+            all_klines[symbol] = klines
+            print(f"    {symbol}: {len(klines)} Kerzen")
+
+    if not all_klines:
+        print("  Keine Daten geladen!")
+        return
+
+    print(f"\n  Teste {len(combinations)} Filter-Kombinationen...")
+    print("  " + "-"*56)
+
+    results = []
+
+    for combo in combinations:
+        total_trades = 0
+        total_wins = 0
+        total_pnl = 0.0
+
+        for symbol, klines in all_klines.items():
+            # Berechne Indikatoren
+            st_results = optimizer.calculate_supertrend(klines, 10, 3.0)
+            kama_results = optimizer.calculate_kama(klines, 10)
+            jma_results = optimizer.calculate_jma(klines, 7)
+
+            if not st_results or not kama_results or not jma_results:
+                continue
+
+            # Simuliere Trades mit dieser Kombination
+            trades = []
+            position = None
+            min_len = min(len(st_results), len(kama_results), len(jma_results), len(klines))
+
+            for i in range(20, min_len):
+                close = klines[i]["close"]
+
+                if i >= len(st_results) or i >= len(kama_results) or i >= len(jma_results):
+                    continue
+
+                st = st_results[i]
+                kama = kama_results[i]
+                jma = jma_results[i]
+
+                if st is None or kama is None or jma is None:
+                    continue
+
+                # Position Management
+                if position:
+                    entry = position["entry_price"]
+                    if position["side"] == "LONG":
+                        pnl = (close - entry) / entry * 100
+                    else:
+                        pnl = (entry - close) / entry * 100
+
+                    # TP oder SL
+                    if pnl >= 4.0 or pnl <= -2.0:
+                        trades.append(pnl)
+                        position = None
+
+                # Entry Signale
+                if not position:
+                    st_dir = st.get("direction", "NEUTRAL") if combo["st"] else "UP"
+                    kama_trend = kama.get("trend", "NEUTRAL") if combo["kama"] else "UP"
+                    jma_trend = jma.get("trend", "NEUTRAL") if combo["jma"] else "UP"
+
+                    # LONG
+                    if st_dir == "UP" and kama_trend != "DOWN" and jma_trend != "DOWN":
+                        position = {"side": "LONG", "entry_price": close}
+
+                    # SHORT
+                    elif st_dir == "DOWN" and kama_trend != "UP" and jma_trend != "UP":
+                        position = {"side": "SHORT", "entry_price": close}
+
+            # Aggregiere Ergebnisse
+            total_trades += len(trades)
+            total_wins += sum(1 for t in trades if t > 0)
+            total_pnl += sum(trades)
+
+        # Berechne Metriken
+        win_rate = (total_wins / total_trades * 100) if total_trades > 0 else 0
+        avg_pnl = (total_pnl / total_trades) if total_trades > 0 else 0
+
+        results.append({
+            "name": combo["name"],
+            "trades": total_trades,
+            "wins": total_wins,
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+            "avg_pnl": avg_pnl
+        })
+
+    # Sortiere nach Total PnL
+    results.sort(key=lambda x: x["total_pnl"], reverse=True)
+
+    # Ausgabe
+    print(f"\n  {'Kombination':<20} {'Trades':>8} {'WinRate':>10} {'Total PnL':>12} {'Avg PnL':>10}")
+    print("  " + "-"*60)
+
+    for r in results:
+        marker = " <-- BESTE" if r == results[0] else ""
+        print(f"  {r['name']:<20} {r['trades']:>8} {r['win_rate']:>9.1f}% {r['total_pnl']:>11.1f}% {r['avg_pnl']:>9.2f}%{marker}")
+
+    # Empfehlung
+    best = results[0]
+    print(f"\n  " + "-"*56)
+    print(f"  EMPFEHLUNG: {best['name']}")
+    print(f"  Win Rate: {best['win_rate']:.1f}%")
+    print(f"  Total PnL: {best['total_pnl']:.1f}%")
+    print(f"  Avg PnL pro Trade: {best['avg_pnl']:.2f}%")
+
+    # Vergleich mit schlechtester
+    worst = results[-1]
+    diff = best['total_pnl'] - worst['total_pnl']
+    print(f"\n  Differenz zur schlechtesten: +{diff:.1f}%")
 
 
 def analyze_filters():
@@ -830,6 +986,10 @@ if __name__ == "__main__":
             # Automatisch schlechte Filter deaktivieren
             autofix_filters()
 
+        elif arg == "filters":
+            # Filter-Kombinationen per Backtest testen
+            backtest_filter_combinations()
+
         elif arg == "all":
             # ALLE Symbole optimieren
             print("\n" + "="*60)
@@ -878,7 +1038,9 @@ if __name__ == "__main__":
         print("    python optimize_htf.py           → Top 10 Symbole")
         print("    python optimize_htf.py all       → ALLE Symbole")
         print("    python optimize_htf.py BTCUSDT   → Einzelnes Symbol")
-        print("    python optimize_htf.py analyze   → Filter-Analyse")
+        print("    python optimize_htf.py filters   → Filter-Kombinations-Backtest")
+        print("    python optimize_htf.py analyze   → Live Filter-Statistiken")
+        print("    python optimize_htf.py autofix   → Schlechte Filter deaktivieren")
         print("")
 
         print("\n  Lade aktive Symbole...")
