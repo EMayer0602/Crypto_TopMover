@@ -515,28 +515,252 @@ def get_active_symbols() -> List[str]:
         return []
 
 
+def analyze_filters():
+    """
+    Analysiert Filter-Performance aus filter_stats.json
+    und empfiehlt welche Filter deaktiviert werden sollten.
+    """
+    print("\n" + "="*60)
+    print("  FILTER ANALYSE")
+    print("  Analysiert welche Filter helfen oder schaden")
+    print("="*60)
+
+    stats_file = "filter_stats.json"
+    if not os.path.exists(stats_file):
+        print(f"\n  ❌ {stats_file} nicht gefunden!")
+        print("  Starte erst den Trader, damit Statistiken gesammelt werden.")
+        return
+
+    with open(stats_file, "r") as f:
+        data = json.load(f)
+
+    filter_counts = data.get("filter_counts", {})
+    passed_trades = data.get("passed_trades", {})
+
+    print("\n  📊 FILTER PERFORMANCE")
+    print("  " + "-"*56)
+
+    recommendations = []
+
+    for filter_name, counts in filter_counts.items():
+        blocked = counts.get("blocked", 0)
+        would_win = counts.get("would_win", 0)
+        would_lose = counts.get("would_lose", 0)
+        checked = would_win + would_lose
+
+        if blocked == 0:
+            continue
+
+        print(f"\n  {filter_name.upper().replace('_', ' ')}")
+        print(f"    Geblockt: {blocked}")
+
+        if checked > 0:
+            win_rate = would_win / checked * 100
+            print(f"    Davon geprüft: {checked}")
+            print(f"    Wären Gewinner: {would_win} ({win_rate:.1f}%)")
+            print(f"    Wären Verlierer: {would_lose} ({100-win_rate:.1f}%)")
+
+            # Empfehlung
+            if win_rate > 50:
+                print(f"    ⚠️  EMPFEHLUNG: DEAKTIVIEREN - blockt zu viele Gewinner!")
+                recommendations.append({
+                    "filter": filter_name,
+                    "action": "DISABLE",
+                    "reason": f"blockt {win_rate:.0f}% Gewinner",
+                    "config_key": f"USE_{filter_name.upper()}_FILTER" if filter_name != "supertrend_entry" else "USE_SUPERTREND_ENTRY_FILTER"
+                })
+            elif win_rate > 35:
+                print(f"    ⚡ NEUTRAL - Filter ist grenzwertig")
+                recommendations.append({
+                    "filter": filter_name,
+                    "action": "WATCH",
+                    "reason": f"blockt {win_rate:.0f}% Gewinner - beobachten",
+                    "config_key": f"USE_{filter_name.upper()}_FILTER" if filter_name != "supertrend_entry" else "USE_SUPERTREND_ENTRY_FILTER"
+                })
+            else:
+                print(f"    ✅ GUT - Filter spart Verluste!")
+        else:
+            print(f"    ⏳ Noch keine Outcome-Daten (braucht 4h)")
+
+    # Zusammenfassung der durchgelassenen Trades
+    print("\n  " + "-"*56)
+    print("  DURCHGELASSENE TRADES")
+    total = passed_trades.get("total", 0)
+    wins = passed_trades.get("wins", 0)
+    if total > 0:
+        win_rate = wins / total * 100
+        print(f"    Total: {total}")
+        print(f"    Gewinner: {wins} ({win_rate:.1f}%)")
+        print(f"    Verlierer: {total - wins} ({100-win_rate:.1f}%)")
+    else:
+        print("    Noch keine abgeschlossenen Trades")
+
+    # Empfehlungen ausgeben
+    if recommendations:
+        print("\n" + "="*60)
+        print("  EMPFEHLUNGEN FÜR config.py")
+        print("="*60)
+
+        disable_count = 0
+        for rec in recommendations:
+            if rec["action"] == "DISABLE":
+                disable_count += 1
+                print(f"\n  ❌ {rec['config_key']} = False")
+                print(f"     Grund: {rec['reason']}")
+
+        if disable_count == 0:
+            print("\n  ✅ Alle Filter sind nützlich - keine Änderungen nötig!")
+
+        # Auto-Fix Option
+        print("\n" + "-"*60)
+        print("  Willst du die Änderungen automatisch anwenden?")
+        print("  Führe aus: python optimize_htf.py autofix")
+
+    print("")
+
+
+def autofix_filters():
+    """
+    Deaktiviert automatisch Filter die zu viele Gewinner blocken.
+    Ändert config.py direkt.
+    """
+    print("\n" + "="*60)
+    print("  AUTOFIX - Filter automatisch anpassen")
+    print("="*60)
+
+    stats_file = "filter_stats.json"
+    if not os.path.exists(stats_file):
+        print(f"\n  ❌ {stats_file} nicht gefunden!")
+        return
+
+    with open(stats_file, "r") as f:
+        data = json.load(f)
+
+    filter_counts = data.get("filter_counts", {})
+
+    # Finde Filter die deaktiviert werden sollten
+    to_disable = []
+    for filter_name, counts in filter_counts.items():
+        blocked = counts.get("blocked", 0)
+        would_win = counts.get("would_win", 0)
+        would_lose = counts.get("would_lose", 0)
+        checked = would_win + would_lose
+
+        if blocked > 0 and checked > 5:  # Mindestens 5 geprüfte Trades
+            win_rate = would_win / checked * 100
+            if win_rate > 50:  # Blockt mehr als 50% Gewinner
+                config_key = f"USE_{filter_name.upper()}_FILTER"
+                if filter_name == "supertrend_entry":
+                    config_key = "USE_SUPERTREND_ENTRY_FILTER"
+                to_disable.append({
+                    "filter": filter_name,
+                    "config_key": config_key,
+                    "win_rate": win_rate
+                })
+
+    if not to_disable:
+        print("\n  ✅ Alle Filter sind nützlich - keine Änderungen nötig!")
+        return
+
+    print(f"\n  {len(to_disable)} Filter werden deaktiviert:")
+    for f in to_disable:
+        print(f"    - {f['filter']} (blockt {f['win_rate']:.0f}% Gewinner)")
+
+    # config.py lesen und ändern
+    config_file = "config.py"
+    if not os.path.exists(config_file):
+        print(f"\n  ❌ {config_file} nicht gefunden!")
+        return
+
+    with open(config_file, "r") as f:
+        config_content = f.read()
+
+    changes_made = 0
+    for f in to_disable:
+        key = f["config_key"]
+        # Suche nach "KEY = True" und ersetze mit "KEY = False"
+        old_pattern = f"{key} = True"
+        new_pattern = f"{key} = False  # AUTO-DISABLED: blockt {f['win_rate']:.0f}% Gewinner"
+
+        if old_pattern in config_content:
+            config_content = config_content.replace(old_pattern, new_pattern)
+            changes_made += 1
+            print(f"    ✓ {key} = False")
+
+    if changes_made > 0:
+        with open(config_file, "w") as f:
+            f.write(config_content)
+        print(f"\n  ✅ {changes_made} Filter in config.py deaktiviert!")
+    else:
+        print("\n  ⚠️ Keine Änderungen nötig (bereits deaktiviert)")
+
+
 if __name__ == "__main__":
     import sys
 
     optimizer = HTFOptimizer()
 
     if len(sys.argv) > 1:
-        # Einzelnes Symbol optimieren
-        symbol = sys.argv[1].upper()
-        if not symbol.endswith("USDT"):
-            symbol += "USDT"
+        arg = sys.argv[1].lower()
 
-        timeframe = sys.argv[2] if len(sys.argv) > 2 else "1h"
+        if arg == "analyze":
+            # Filter-Analyse
+            analyze_filters()
 
-        result = optimizer.optimize_symbol(symbol, timeframe)
-        if result:
-            optimizer.save_settings({symbol: result})
+        elif arg == "autofix":
+            # Automatisch schlechte Filter deaktivieren
+            autofix_filters()
+
+        elif arg == "all":
+            # ALLE Symbole optimieren
+            print("\n" + "="*60)
+            print("  HTF OPTIMIZER - ALLE SYMBOLE")
+            print("="*60)
+
+            symbols = get_active_symbols()
+            if not symbols:
+                print("  Konnte keine Symbole laden!")
+                sys.exit(1)
+
+            print(f"  {len(symbols)} Symbole werden optimiert...")
+
+            all_results = {}
+            for tf in ["15m", "1h"]:
+                print(f"\n{'#'*60}")
+                print(f"  TIMEFRAME: {tf}")
+                print(f"{'#'*60}")
+
+                results = optimizer.optimize_multiple(symbols, tf)  # ALLE Symbole
+                all_results.update(results)
+                optimizer.save_settings(results, f"symbol_settings_{tf}.json")
+
+            # Kombinierte Settings speichern
+            optimizer.save_settings(all_results, "symbol_settings.json")
+            print(f"\n  Gesamt: {len(all_results)} Symbole optimiert")
+
+        else:
+            # Einzelnes Symbol optimieren
+            symbol = arg.upper()
+            if not symbol.endswith("USDT"):
+                symbol += "USDT"
+
+            timeframe = sys.argv[2] if len(sys.argv) > 2 else "1h"
+
+            result = optimizer.optimize_symbol(symbol, timeframe)
+            if result:
+                optimizer.save_settings({symbol: result})
     else:
-        # Top Symbole optimieren
+        # Standard: Top 10 Symbole
         print("\n" + "="*60)
         print("  HTF OPTIMIZER")
         print("  Findet optimale Indicator-Settings pro Symbol")
         print("="*60)
+        print("\n  Verwendung:")
+        print("    python optimize_htf.py           → Top 10 Symbole")
+        print("    python optimize_htf.py all       → ALLE Symbole")
+        print("    python optimize_htf.py BTCUSDT   → Einzelnes Symbol")
+        print("    python optimize_htf.py analyze   → Filter-Analyse")
+        print("")
 
         print("\n  Lade aktive Symbole...")
         symbols = get_active_symbols()
@@ -554,7 +778,7 @@ if __name__ == "__main__":
             print(f"  TIMEFRAME: {tf}")
             print(f"{'#'*60}")
 
-            results = optimizer.optimize_multiple(symbols[:10], tf)  # Nur Top 10
+            results = optimizer.optimize_multiple(symbols[:10], tf)  # Top 10
             optimizer.save_settings(results, f"symbol_settings_{tf}.json")
 
         print("\n\n  FERTIG!")
