@@ -2174,6 +2174,9 @@ def run_testnet_auto_trading():
                     if coin["breakout"] == "BREAKOUT_UP" and long_count < max_longs and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
+                            # Nicht LONG wenn bereits SHORT offen
+                            if f"{coin['symbol']}_SHORT" in trader.positions:
+                                continue
                             print(f"\n[{timestamp}] 🚀 BREAKOUT LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (über {config.BREAKOUT_LOOKBACK_DAYS}-Tage High)")
                             result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                             if result:
@@ -2183,6 +2186,9 @@ def run_testnet_auto_trading():
                     elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < max_shorts and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
+                            # Nicht SHORT wenn bereits LONG offen
+                            if f"{coin['symbol']}_LONG" in trader.positions:
+                                continue
                             print(f"\n[{timestamp}] 💥 BREAKOUT SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (unter {config.BREAKOUT_LOOKBACK_DAYS}-Tage Low)")
                             result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
                             if result:
@@ -2198,6 +2204,9 @@ def run_testnet_auto_trading():
                     if coin["trend"] == "UP" and long_count < max_longs and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
+                            # Nicht LONG wenn bereits SHORT offen
+                            if f"{coin['symbol']}_SHORT" in trader.positions:
+                                continue
                             print(f"\n[{timestamp}] 📈 TREND LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage UP)")
                             result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                             if result:
@@ -2207,6 +2216,9 @@ def run_testnet_auto_trading():
                     elif coin["trend"] == "DOWN" and short_count < max_shorts and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
+                            # Nicht SHORT wenn bereits LONG offen
+                            if f"{coin['symbol']}_LONG" in trader.positions:
+                                continue
                             print(f"\n[{timestamp}] 📉 TREND SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage DOWN)")
                             result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
                             if result:
@@ -2222,6 +2234,10 @@ def run_testnet_auto_trading():
                 for coin in losers:
                     key = f"{coin['symbol']}_LONG"
                     if key not in trader.positions:
+                        # WICHTIG: Nicht LONG gehen wenn bereits SHORT offen!
+                        if f"{coin['symbol']}_SHORT" in trader.positions:
+                            continue
+
                         # Bei aktivem Trend-Filter: Prüfe ob NICHT im Downtrend
                         if config.USE_TREND_FILTER:
                             trend = trader.check_trend_consistency(coin["symbol"])
@@ -2273,6 +2289,10 @@ def run_testnet_auto_trading():
                 for coin in gainers:
                     key = f"{coin['symbol']}_SHORT"
                     if key not in trader.positions:
+                        # WICHTIG: Nicht SHORT gehen wenn bereits LONG offen!
+                        if f"{coin['symbol']}_LONG" in trader.positions:
+                            continue
+
                         # Bei aktivem Trend-Filter: Prüfe ob NICHT im Uptrend
                         if config.USE_TREND_FILTER:
                             trend = trader.check_trend_consistency(coin["symbol"])
