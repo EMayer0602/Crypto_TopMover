@@ -1274,13 +1274,28 @@ class BinanceTestnetTrader:
         """
         Berechnet dynamische Long/Short Limits basierend auf Fear & Greed Index.
 
-        Logik (Contrarian):
-        - Extreme Fear (0-20): Mehr Longs erlaubt (Kaufgelegenheit)
-        - Extreme Greed (80-100): Mehr Shorts erlaubt (Überkauft)
+        MOMENTUM-Modus (config.FEAR_GREED_MODE = "MOMENTUM"):
+        - Greed (70-100): Mehr Longs (Trend folgen)
+        - Fear (0-30): Mehr Shorts (Trend folgen)
+
+        CONTRARIAN-Modus (config.FEAR_GREED_MODE = "CONTRARIAN"):
+        - Fear (0-30): Mehr Longs (Kaufgelegenheit)
+        - Greed (70-100): Mehr Shorts (Überkauft)
 
         Returns: {"max_longs": int, "max_shorts": int, "reason": str}
         """
         total_positions = config.MAX_OPEN_POSITIONS
+
+        # Wenn F&G Allocation deaktiviert → 50/50
+        if not config.USE_FEAR_GREED_ALLOCATION:
+            half = total_positions // 2
+            return {
+                "max_longs": half,
+                "max_shorts": total_positions - half,
+                "fear_greed": 50,
+                "classification": "Disabled",
+                "reason": f"F&G deaktiviert → {half}L/{total_positions - half}S"
+            }
 
         # Versuche Fear & Greed Index zu holen
         fng = self.get_fear_greed_index()
@@ -1288,43 +1303,48 @@ class BinanceTestnetTrader:
 
         # Fallback auf BTC/ETH Trend wenn F&G nicht verfügbar
         if value == 50 and fng["classification"] == "Neutral":
-            # Prüfe BTC/ETH Trend als Fallback
             market = self.get_market_trend()
             if market["direction"] in ["BEARISH", "WEAK_BEARISH"]:
                 value = 30  # Simuliere Fear
             elif market["direction"] in ["BULLISH", "WEAK_BULLISH"]:
                 value = 70  # Simuliere Greed
 
-        # Berechne Verteilung (Contrarian-Ansatz)
-        # Fear = mehr Longs, Greed = mehr Shorts
-        # Skala: 0-100 → Longs bekommen mehr bei niedrigem Wert
-
         # Dezile: 0-10, 10-20, ..., 90-100
         decile = min(9, value // 10)  # 0-9
 
-        # Bei extremer Fear (Decile 0-2): Mehr Longs
-        # Bei extremer Greed (Decile 7-9): Mehr Shorts
-        # Mitte (Decile 3-6): Ausgeglichen
+        # Modus-abhängige Berechnung
+        mode = getattr(config, 'FEAR_GREED_MODE', 'MOMENTUM')
 
-        if decile <= 2:  # Extreme Fear (0-30)
-            # 70% Longs, 30% Shorts
-            long_ratio = 0.7 + (2 - decile) * 0.1  # 0.7, 0.8, 0.9
-        elif decile >= 7:  # Extreme Greed (70-100)
-            # 30% Longs, 70% Shorts
-            long_ratio = 0.3 - (decile - 7) * 0.1  # 0.3, 0.2, 0.1
-        else:  # Neutral (30-70)
-            long_ratio = 0.5
+        if mode == "MOMENTUM":
+            # MOMENTUM: Greed = mehr Longs, Fear = mehr Shorts
+            if decile >= 7:  # Greed (70-100) → Mehr Longs
+                long_ratio = 0.7 + (decile - 7) * 0.1  # 0.7, 0.8, 0.9
+            elif decile <= 2:  # Fear (0-30) → Mehr Shorts
+                long_ratio = 0.3 - (2 - decile) * 0.1  # 0.3, 0.2, 0.1
+            else:  # Neutral
+                long_ratio = 0.5
+            mode_label = "MOM"
+        else:
+            # CONTRARIAN: Fear = mehr Longs, Greed = mehr Shorts
+            if decile <= 2:  # Fear (0-30) → Mehr Longs
+                long_ratio = 0.7 + (2 - decile) * 0.1
+            elif decile >= 7:  # Greed (70-100) → Mehr Shorts
+                long_ratio = 0.3 - (decile - 7) * 0.1
+            else:  # Neutral
+                long_ratio = 0.5
+            mode_label = "CON"
 
         max_longs = max(1, int(total_positions * long_ratio))
         max_shorts = max(1, total_positions - max_longs)
 
-        reason = f"F&G: {value} ({fng['classification']}) → {max_longs}L/{max_shorts}S"
+        reason = f"F&G: {value} ({fng['classification']}) [{mode_label}] → {max_longs}L/{max_shorts}S"
 
         return {
             "max_longs": max_longs,
             "max_shorts": max_shorts,
             "fear_greed": value,
             "classification": fng["classification"],
+            "mode": mode,
             "reason": reason
         }
 
@@ -1930,4 +1950,44 @@ def run_testnet_auto_trading():
 
 
 if __name__ == "__main__":
-    run_testnet_auto_trading()
+    import sys
+
+    if len(sys.argv) > 1:
+        mode = sys.argv[1].lower()
+
+        if mode == "backtest":
+            print("\n" + "="*60)
+            print("  BACKTEST MODUS")
+            print("  Starte: python backtest_supertrend.py")
+            print("="*60)
+            import subprocess
+            subprocess.run([sys.executable, "backtest_supertrend.py"])
+
+        elif mode == "analyze":
+            print("\n" + "="*60)
+            print("  ANALYSE MODUS")
+            print("  Starte: python analyze_peaks.py")
+            print("="*60)
+            import subprocess
+            subprocess.run([sys.executable, "analyze_peaks.py"])
+
+        elif mode == "help":
+            print("\n" + "="*60)
+            print("  CRYPTO TOPMOVER - HILFE")
+            print("="*60)
+            print("\n  Verwendung:")
+            print("    python testnet_trader.py           → Live Trading")
+            print("    python testnet_trader.py backtest  → Backtest starten")
+            print("    python testnet_trader.py analyze   → Peak-Analyse")
+            print("    python testnet_trader.py help      → Diese Hilfe")
+            print("\n  Config (config.py):")
+            print("    FEAR_GREED_MODE = 'MOMENTUM'    → Greed=Longs, Fear=Shorts")
+            print("    FEAR_GREED_MODE = 'CONTRARIAN'  → Fear=Longs, Greed=Shorts")
+            print("="*60 + "\n")
+
+        else:
+            print(f"\n  ❌ Unbekannter Modus: {mode}")
+            print("  Verwende: python testnet_trader.py help")
+    else:
+        # Standard: Live Trading
+        run_testnet_auto_trading()

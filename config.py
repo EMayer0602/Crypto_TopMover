@@ -90,6 +90,11 @@ HTF_TIMEFRAME = "4h"              # Timeframe für Supertrend (1h, 4h, 1d)
 SUPERTREND_PERIOD = 10            # ATR Periode
 SUPERTREND_MULTIPLIER = 3.0       # ATR Multiplikator
 
+# Fear & Greed Position Allocation
+USE_FEAR_GREED_ALLOCATION = True  # Dynamische Position-Verteilung aktivieren
+FEAR_GREED_MODE = "MOMENTUM"      # "MOMENTUM" = Greed→Longs, Fear→Shorts
+                                  # "CONTRARIAN" = Fear→Longs, Greed→Shorts
+
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen
 QUOTE_CURRENCY = "USDT"     # Nur Paare mit USDT handeln
