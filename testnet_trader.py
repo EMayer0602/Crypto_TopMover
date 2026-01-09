@@ -1692,6 +1692,7 @@ def run_testnet_auto_trading():
             # Zähle offene Positionen
             long_count = len([p for p in trader.positions.values() if p.side == "LONG"])
             short_count = len([p for p in trader.positions.values() if p.side == "SHORT"])
+            max_per_side = config.MAX_OPEN_POSITIONS // 2  # Dynamisches Limit pro Seite
 
             # 2. Markt-Check (HTF Supertrend oder BTC/ETH)
             long_allowed, long_reason = trader.is_trade_allowed_by_market("LONG")
@@ -1711,12 +1712,12 @@ def run_testnet_auto_trading():
                 print(f"  ⛔ Keine Shorts: {short_reason}")
 
             # 3. BREAKOUT DETECTION (wenn aktiviert)
-            if config.USE_BREAKOUT_DETECTION and (long_count < 2 or short_count < 2):
+            if config.USE_BREAKOUT_DETECTION and (long_count < max_per_side or short_count < max_per_side):
                 print(f"\n[{timestamp}] 🔍 Suche Breakout-Signale...")
                 breakout_signals = trader.get_breakout_signals(5)
 
                 for coin in breakout_signals:
-                    if coin["breakout"] == "BREAKOUT_UP" and long_count < 2 and long_allowed:
+                    if coin["breakout"] == "BREAKOUT_UP" and long_count < max_per_side and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 🚀 BREAKOUT LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (über {config.BREAKOUT_LOOKBACK_DAYS}-Tage High)")
@@ -1725,7 +1726,7 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < 2 and short_allowed:
+                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < max_per_side and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 💥 BREAKOUT SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (unter {config.BREAKOUT_LOOKBACK_DAYS}-Tage Low)")
@@ -1735,12 +1736,12 @@ def run_testnet_auto_trading():
                                 break
 
             # 3b. TREND-FOLLOWING (Fallback wenn kein Breakout)
-            elif config.USE_TREND_FILTER and (long_count < 2 or short_count < 2):
+            elif config.USE_TREND_FILTER and (long_count < max_per_side or short_count < max_per_side):
                 print(f"\n[{timestamp}] 🔍 Suche Trend-Signale...")
                 trend_signals = trader.get_trend_signals(5)
 
                 for coin in trend_signals:
-                    if coin["trend"] == "UP" and long_count < 2 and long_allowed:
+                    if coin["trend"] == "UP" and long_count < max_per_side and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 📈 TREND LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage UP)")
@@ -1749,7 +1750,7 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["trend"] == "DOWN" and short_count < 2 and short_allowed:
+                    elif coin["trend"] == "DOWN" and short_count < max_per_side and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 📉 TREND SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage DOWN)")
@@ -1762,7 +1763,7 @@ def run_testnet_auto_trading():
             # Nur wenn Trend-Filter aus ist ODER keine Trend-Signale gefunden wurden
 
             # LONG: Buy the Dip
-            if long_count < 2 and long_allowed:
+            if long_count < max_per_side and long_allowed:
                 losers = trader.get_top_losers(5)
                 for coin in losers:
                     key = f"{coin['symbol']}_LONG"
@@ -1795,7 +1796,7 @@ def run_testnet_auto_trading():
                             break
 
             # SHORT: Fade the Pump
-            if short_count < 2 and short_allowed:
+            if short_count < max_per_side and short_allowed:
                 gainers = trader.get_top_gainers(5)
                 for coin in gainers:
                     key = f"{coin['symbol']}_SHORT"
