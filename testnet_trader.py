@@ -266,8 +266,14 @@ class BinanceTestnetTrader:
             "supertrend_multiplier": config.ENTRY_SUPERTREND_MULTIPLIER,
             "kama_period": config.KAMA_PERIOD,
             "jma_period": config.JMA_PERIOD,
-            "timeframe": config.ENTRY_SUPERTREND_TIMEFRAME
+            "timeframe": config.ENTRY_SUPERTREND_TIMEFRAME,
+            "tradeable": True  # Default: tradeable
         }
+
+    def is_symbol_tradeable(self, symbol: str) -> bool:
+        """Prüft ob Symbol tradeable ist (>50% Win Rate im Backtest)"""
+        settings = self.get_symbol_settings(symbol)
+        return settings.get("tradeable", True)  # Default True wenn nicht optimiert
 
     def _sign(self, params: dict) -> str:
         """Erstellt HMAC SHA256 Signatur"""
@@ -2308,6 +2314,9 @@ def run_testnet_auto_trading():
                             # Nicht LONG wenn bereits SHORT offen
                             if f"{coin['symbol']}_SHORT" in trader.positions:
                                 continue
+                            # Skip wenn nicht tradeable (<50% Win Rate)
+                            if not trader.is_symbol_tradeable(coin["symbol"]):
+                                continue
                             print(f"\n[{timestamp}] 🚀 BREAKOUT LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (über {config.BREAKOUT_LOOKBACK_DAYS}-Tage High)")
                             result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                             if result:
@@ -2319,6 +2328,9 @@ def run_testnet_auto_trading():
                         if key not in trader.positions:
                             # Nicht SHORT wenn bereits LONG offen
                             if f"{coin['symbol']}_LONG" in trader.positions:
+                                continue
+                            # Skip wenn nicht tradeable (<50% Win Rate)
+                            if not trader.is_symbol_tradeable(coin["symbol"]):
                                 continue
                             print(f"\n[{timestamp}] 💥 BREAKOUT SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (unter {config.BREAKOUT_LOOKBACK_DAYS}-Tage Low)")
                             result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
@@ -2338,6 +2350,9 @@ def run_testnet_auto_trading():
                             # Nicht LONG wenn bereits SHORT offen
                             if f"{coin['symbol']}_SHORT" in trader.positions:
                                 continue
+                            # Skip wenn nicht tradeable (<50% Win Rate)
+                            if not trader.is_symbol_tradeable(coin["symbol"]):
+                                continue
                             print(f"\n[{timestamp}] 📈 TREND LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage UP)")
                             result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                             if result:
@@ -2349,6 +2364,9 @@ def run_testnet_auto_trading():
                         if key not in trader.positions:
                             # Nicht SHORT wenn bereits LONG offen
                             if f"{coin['symbol']}_LONG" in trader.positions:
+                                continue
+                            # Skip wenn nicht tradeable (<50% Win Rate)
+                            if not trader.is_symbol_tradeable(coin["symbol"]):
                                 continue
                             print(f"\n[{timestamp}] 📉 TREND SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage DOWN)")
                             result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
@@ -2367,6 +2385,10 @@ def run_testnet_auto_trading():
                     if key not in trader.positions:
                         # WICHTIG: Nicht LONG gehen wenn bereits SHORT offen!
                         if f"{coin['symbol']}_SHORT" in trader.positions:
+                            continue
+
+                        # Skip wenn nicht tradeable (<50% Win Rate)
+                        if not trader.is_symbol_tradeable(coin["symbol"]):
                             continue
 
                         # Bei aktivem Trend-Filter: Prüfe ob NICHT im Downtrend
@@ -2438,6 +2460,10 @@ def run_testnet_auto_trading():
                     if key not in trader.positions:
                         # WICHTIG: Nicht SHORT gehen wenn bereits LONG offen!
                         if f"{coin['symbol']}_LONG" in trader.positions:
+                            continue
+
+                        # Skip wenn nicht tradeable (<50% Win Rate)
+                        if not trader.is_symbol_tradeable(coin["symbol"]):
                             continue
 
                         # Bei aktivem Trend-Filter: Prüfe ob NICHT im Uptrend

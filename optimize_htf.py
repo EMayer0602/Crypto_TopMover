@@ -434,13 +434,13 @@ class HTFOptimizer:
         if best_result and best_settings:
             win_rate = best_result['win_rate']
 
-            # Nur Symbole mit >50% Win Rate speichern
-            if win_rate < 50:
-                print(f"skip (WinRate {win_rate:.0f}% < 50%)")
-                return {}
+            # Kompakte Ausgabe mit Win Rate Markierung
+            marker = "✓" if win_rate >= 50 else "✗"
+            print(f"{marker} WinRate={win_rate:.0f}% PnL={best_result['total_pnl']:.1f}% ({best_result['trades']} trades)")
 
-            # Kompakte Ausgabe
-            print(f"WinRate={win_rate:.0f}% PnL={best_result['total_pnl']:.1f}% ({best_result['trades']} trades)")
+            # Speichere ALLE, aber markiere tradeable
+            best_settings["win_rate"] = win_rate
+            best_settings["tradeable"] = win_rate >= 50
 
             return {
                 "symbol": symbol,
