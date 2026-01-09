@@ -47,7 +47,7 @@ class HTFOptimizer:
         self.jma_periods = [5, 7, 10]
 
     def get_klines(self, symbol: str, interval: str, limit: int = 500) -> List[dict]:
-        """Holt historische Klines von Binance"""
+        """Holt historische Klines von Binance (Futures oder Spot)"""
         cache_file = f"{self.cache_dir}/{symbol}_{interval}_{limit}.json"
 
         # Cache prüfen (max 1 Stunde alt)
@@ -57,39 +57,44 @@ class HTFOptimizer:
                 with open(cache_file, "r") as f:
                     return json.load(f)
 
-        url = "https://api.binance.com/api/v3/klines"
+        # Versuche zuerst Futures API, dann Spot API
+        urls = [
+            "https://fapi.binance.com/fapi/v1/klines",  # Futures
+            "https://api.binance.com/api/v3/klines",    # Spot
+        ]
+
         params = {
             "symbol": symbol,
             "interval": interval,
             "limit": limit
         }
 
-        try:
-            response = self.session.get(url, params=params, timeout=10)
-            if response.status_code != 200:
-                print(f"  API Error: {response.status_code}")
-                return []
+        for url in urls:
+            try:
+                response = self.session.get(url, params=params, timeout=10)
+                if response.status_code == 200:
+                    klines = response.json()
+                    if klines:
+                        result = [{
+                            "open_time": k[0],
+                            "open": float(k[1]),
+                            "high": float(k[2]),
+                            "low": float(k[3]),
+                            "close": float(k[4]),
+                            "volume": float(k[5]),
+                            "close_time": k[6],
+                        } for k in klines]
 
-            klines = response.json()
-            result = [{
-                "open_time": k[0],
-                "open": float(k[1]),
-                "high": float(k[2]),
-                "low": float(k[3]),
-                "close": float(k[4]),
-                "volume": float(k[5]),
-                "close_time": k[6],
-            } for k in klines]
+                        # Cache speichern
+                        with open(cache_file, "w") as f:
+                            json.dump(result, f)
 
-            # Cache speichern
-            with open(cache_file, "w") as f:
-                json.dump(result, f)
+                        return result
+            except Exception:
+                continue
 
-            return result
-
-        except Exception as e:
-            print(f"  Error fetching {symbol}: {e}")
-            return []
+        # Beide APIs fehlgeschlagen - still skip
+        return []
 
     def calculate_atr(self, klines: List[dict], period: int = 10) -> List[float]:
         """Berechnet ATR"""
@@ -383,17 +388,13 @@ class HTFOptimizer:
         Findet optimale Settings für ein Symbol.
         Returns: Beste Settings + Performance
         """
-        print(f"\n{'='*50}")
-        print(f"  Optimiere {symbol} auf {timeframe}")
-        print(f"{'='*50}")
-
-        # Lade Daten
+        # Lade Daten (still wenn fehlgeschlagen)
         klines = self.get_klines(symbol, timeframe, 500)
         if len(klines) < 100:
-            print(f"  Nicht genug Daten ({len(klines)} Kerzen)")
+            # Überspringe leise - kein Spam bei 280 Symbolen
             return {}
 
-        print(f"  {len(klines)} Kerzen geladen")
+        print(f"\n  {symbol}: {len(klines)} Kerzen...", end=" ", flush=True)
 
         best_result = None
         best_settings = None
@@ -431,15 +432,8 @@ class HTFOptimizer:
                                 }
 
         if best_result and best_settings:
-            print(f"\n  Beste Settings für {symbol}:")
-            print(f"    Supertrend: Period={best_settings['supertrend_period']}, Mult={best_settings['supertrend_multiplier']}")
-            print(f"    KAMA: Period={best_settings['kama_period']}")
-            print(f"    JMA: Period={best_settings['jma_period']}")
-            print(f"    ---")
-            print(f"    Trades: {best_result['trades']}")
-            print(f"    Win Rate: {best_result['win_rate']:.1f}%")
-            print(f"    Total PnL: {best_result['total_pnl']:.1f}%")
-            print(f"    Avg PnL: {best_result['avg_pnl']:.2f}%")
+            # Kompakte Ausgabe
+            print(f"WinRate={best_result['win_rate']:.0f}% PnL={best_result['total_pnl']:.1f}% ({best_result['trades']} trades)")
 
             return {
                 "symbol": symbol,
@@ -447,19 +441,33 @@ class HTFOptimizer:
                 "performance": best_result
             }
         else:
-            print(f"  Keine validen Settings gefunden (zu wenig Trades)")
+            print("skip (zu wenig Trades)")
             return {}
 
     def optimize_multiple(self, symbols: List[str], timeframe: str = "1h") -> Dict:
         """Optimiert mehrere Symbole"""
         results = {}
+        total = len(symbols)
+        success = 0
+        skipped = 0
 
-        for symbol in symbols:
+        print(f"\n  Optimiere {total} Symbole auf {timeframe}...")
+
+        for i, symbol in enumerate(symbols):
             result = self.optimize_symbol(symbol, timeframe)
             if result:
                 results[symbol] = result
-            time.sleep(0.5)  # Rate limiting
+                success += 1
+            else:
+                skipped += 1
 
+            # Fortschritt alle 50 Symbole
+            if (i + 1) % 50 == 0:
+                print(f"\n  --- Fortschritt: {i+1}/{total} ({success} OK, {skipped} skip) ---")
+
+            time.sleep(0.3)  # Rate limiting
+
+        print(f"\n  Fertig: {success} optimiert, {skipped} übersprungen")
         return results
 
     def save_settings(self, results: Dict, filename: str = "symbol_settings.json"):
