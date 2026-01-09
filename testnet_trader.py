@@ -27,6 +27,7 @@ class TestnetPosition:
     entry_time: str
     order_id: str
     peak_price: float = 0.0  # Höchstpreis (LONG) / Tiefstpreis (SHORT) für Trailing Stop
+    partial_closed: bool = False  # Partial TP bereits genommen
 
 
 class BinanceTestnetTrader:
@@ -317,6 +318,58 @@ class BinanceTestnetTrader:
 
         return None
 
+    def futures_partial_close(self, symbol: str, side: str, close_ratio: float = 0.5) -> Optional[dict]:
+        """Schließt einen Teil der Position (Partial Take Profit)"""
+        key = f"{symbol}_{side}"
+        if key not in self.positions:
+            print(f"❌ Keine {side} Position in {symbol}")
+            return None
+
+        position = self.positions[key]
+
+        # Berechne Partial Quantity
+        precision = self._get_futures_precision(symbol)
+        partial_qty = round(position.quantity * close_ratio, precision)
+
+        if partial_qty <= 0:
+            print(f"⚠️  Partial Quantity zu klein für {symbol}")
+            return None
+
+        url = f"{self.futures_url}/fapi/v1/order"
+
+        # LONG schließen = SELL, SHORT schließen = BUY
+        close_side = "SELL" if side == "LONG" else "BUY"
+
+        params = {
+            "symbol": symbol,
+            "side": close_side,
+            "type": "MARKET",
+            "quantity": partial_qty,
+        }
+
+        result = self._request("POST", url, params, signed=True)
+        if result:
+            exit_price = self._get_futures_price(symbol)
+
+            # PnL berechnen
+            if side == "LONG":
+                pnl = (exit_price - position.entry_price) / position.entry_price * 100
+            else:  # SHORT
+                pnl = (position.entry_price - exit_price) / position.entry_price * 100
+
+            # Position aktualisieren (reduzierte Quantity)
+            position.quantity = round(position.quantity - partial_qty, precision)
+            position.partial_closed = True
+            self._save_state()
+
+            print(f"🎯 PARTIAL TP ({close_ratio*100:.0f}%): {partial_qty:.4f} {symbol.replace('USDT', '')} "
+                  f"@ ${exit_price:.4f} | PnL: {pnl:+.2f}%")
+            print(f"   Verbleibend: {position.quantity:.4f} {symbol.replace('USDT', '')}")
+
+            return result
+
+        return None
+
     def futures_long(self, symbol: str, usdt_amount: float) -> Optional[dict]:
         """Öffnet LONG Position (Futures) - Buy the Dip"""
         price = self._get_futures_price(symbol)
@@ -584,6 +637,17 @@ class BinanceTestnetTrader:
                             print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
                         continue
 
+                # Partial Take Profit für LONG
+                if config.USE_PARTIAL_TP and not pos.partial_closed:
+                    if pnl >= config.PARTIAL_TP_PERCENT:
+                        print(f"🎯 PARTIAL TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
+                        result = self.futures_partial_close(
+                            pos.symbol, "LONG", config.PARTIAL_TP_CLOSE_RATIO
+                        )
+                        if not result:
+                            print(f"⚠️  Partial TP fehlgeschlagen für LONG {pos.symbol}")
+                        continue  # Zum nächsten Position, nicht sofort Full TP prüfen
+
                 # Normaler TP/SL
                 if pnl >= config.TAKE_PROFIT_PERCENT:
                     print(f"📈 TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
@@ -623,6 +687,17 @@ class BinanceTestnetTrader:
                         if not result:
                             print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
                         continue
+
+                # Partial Take Profit für SHORT
+                if config.USE_PARTIAL_TP and not pos.partial_closed:
+                    if pnl >= config.PARTIAL_TP_PERCENT:
+                        print(f"🎯 PARTIAL TP erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
+                        result = self.futures_partial_close(
+                            pos.symbol, "SHORT", config.PARTIAL_TP_CLOSE_RATIO
+                        )
+                        if not result:
+                            print(f"⚠️  Partial TP fehlgeschlagen für SHORT {pos.symbol}")
+                        continue  # Zum nächsten Position, nicht sofort Full TP prüfen
 
                 # Normaler TP/SL
                 if pnl >= config.SHORT_TAKE_PROFIT:
@@ -789,6 +864,83 @@ class BinanceTestnetTrader:
                 return (True, f"Preis {abs(distance_atr):.1f}x ATR unter ST → OK ✓")
 
         return (True, "Supertrend OK")
+
+    def check_volume_filter(self, symbol: str) -> Tuple[bool, str]:
+        """
+        Prüft ob das aktuelle Volume überdurchschnittlich ist.
+        Bestätigt echte Bewegungen vs. Fake-Moves mit wenig Volumen.
+        """
+        if not config.USE_VOLUME_FILTER:
+            return (True, "Volume Filter deaktiviert")
+
+        klines = self.get_klines(symbol, "1h", config.VOLUME_LOOKBACK + 1)
+        if len(klines) < config.VOLUME_LOOKBACK + 1:
+            return (True, "Nicht genug Daten für Volume")
+
+        # Durchschnitts-Volume berechnen (ohne letzte Kerze)
+        volumes = [k["volume"] for k in klines[:-1]]
+        avg_volume = sum(volumes) / len(volumes)
+
+        # Aktuelles Volume
+        current_volume = klines[-1]["volume"]
+
+        if avg_volume == 0:
+            return (True, "Volume nicht verfügbar")
+
+        volume_ratio = current_volume / avg_volume
+
+        if volume_ratio >= config.VOLUME_MIN_RATIO:
+            return (True, f"Volume {volume_ratio:.1f}x Avg ✓")
+        else:
+            return (False, f"Volume {volume_ratio:.1f}x Avg < {config.VOLUME_MIN_RATIO}x (zu niedrig)")
+
+    def get_funding_rate(self, symbol: str) -> Optional[float]:
+        """Holt aktuelle Funding Rate für ein Symbol"""
+        try:
+            url = f"{self.futures_url}/fapi/v1/fundingRate"
+            params = {"symbol": symbol, "limit": 1}
+            result = self._request("GET", url, params)
+            if result and len(result) > 0:
+                return float(result[0].get("fundingRate", 0))
+        except:
+            pass
+        return None
+
+    def check_funding_rate_filter(self, symbol: str, side: str) -> Tuple[bool, str]:
+        """
+        Prüft Funding Rate als Contrarian-Indikator.
+        - Hohe positive Funding → zu viele Longs → bevorzuge Shorts
+        - Hohe negative Funding → zu viele Shorts → bevorzuge Longs
+        """
+        if not config.USE_FUNDING_RATE_FILTER:
+            return (True, "Funding Filter deaktiviert")
+
+        funding = self.get_funding_rate(symbol)
+        if funding is None:
+            return (True, "Funding nicht verfügbar")
+
+        threshold = config.FUNDING_RATE_THRESHOLD
+        funding_pct = funding * 100  # Als Prozent
+
+        if side == "LONG":
+            if funding > threshold:
+                # Hohe positive Funding = viele Longs = gefährlich für Long
+                return (False, f"Funding {funding_pct:.3f}% zu hoch → Longs riskant")
+            elif funding < -threshold:
+                # Negative Funding = wenige Longs = gut für Long
+                return (True, f"Funding {funding_pct:.3f}% negativ → Longs bevorzugt ✓")
+            return (True, f"Funding {funding_pct:.3f}% neutral ✓")
+
+        elif side == "SHORT":
+            if funding < -threshold:
+                # Hohe negative Funding = viele Shorts = gefährlich für Short
+                return (False, f"Funding {funding_pct:.3f}% zu negativ → Shorts riskant")
+            elif funding > threshold:
+                # Positive Funding = wenige Shorts = gut für Short
+                return (True, f"Funding {funding_pct:.3f}% positiv → Shorts bevorzugt ✓")
+            return (True, f"Funding {funding_pct:.3f}% neutral ✓")
+
+        return (True, "Funding OK")
 
     def check_trend_consistency(self, symbol: str) -> str:
         """
@@ -1894,7 +2046,20 @@ def run_testnet_auto_trading():
                             if not st_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
                                 continue
-                            print(f"  ✓ ST Entry: {st_reason}")
+
+                        # Volume Filter: Nur bei überdurchschnittlichem Volume
+                        if config.USE_VOLUME_FILTER:
+                            vol_ok, vol_reason = trader.check_volume_filter(coin["symbol"])
+                            if not vol_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {vol_reason}")
+                                continue
+
+                        # Funding Rate Filter: Contrarian bei extremer Funding
+                        if config.USE_FUNDING_RATE_FILTER:
+                            fund_ok, fund_reason = trader.check_funding_rate_filter(coin["symbol"], "LONG")
+                            if not fund_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {fund_reason}")
+                                continue
 
                         print(f"\n[{timestamp}] 📉 MEAN REV LONG: {coin['base']} @ {coin['change_percent']:.1f}%")
                         result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
@@ -1928,6 +2093,20 @@ def run_testnet_auto_trading():
                                 print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
                                 continue
                             print(f"  ✓ ST Entry: {st_reason}")
+
+                        # Volume Filter: Nur bei überdurchschnittlichem Volume
+                        if config.USE_VOLUME_FILTER:
+                            vol_ok, vol_reason = trader.check_volume_filter(coin["symbol"])
+                            if not vol_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {vol_reason}")
+                                continue
+
+                        # Funding Rate Filter: Contrarian bei extremer Funding
+                        if config.USE_FUNDING_RATE_FILTER:
+                            fund_ok, fund_reason = trader.check_funding_rate_filter(coin["symbol"], "SHORT")
+                            if not fund_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {fund_reason}")
+                                continue
 
                         print(f"\n[{timestamp}] 📈 MEAN REV SHORT: {coin['base']} @ +{coin['change_percent']:.1f}%")
                         result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)

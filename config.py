@@ -58,6 +58,20 @@ ENTRY_SUPERTREND_PERIOD = 10          # ATR Periode
 ENTRY_SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
 ENTRY_MAX_ATR_DISTANCE = 2.0          # Max. Abstand in ATR (gelockert von 1.5)
 
+# Volume Filter (bestätigt echte Bewegungen)
+USE_VOLUME_FILTER = True              # Volume Filter aktivieren
+VOLUME_MIN_RATIO = 1.5                # Min. Volume Ratio (1.5 = 50% über Durchschnitt)
+VOLUME_LOOKBACK = 20                  # Anzahl Kerzen für Durchschnitts-Berechnung
+
+# Partial Take Profit (sichert Gewinne früher)
+USE_PARTIAL_TP = True                 # Partial TP aktivieren
+PARTIAL_TP_PERCENT = 2.0              # Erster TP bei +2%
+PARTIAL_TP_CLOSE_RATIO = 0.5          # 50% der Position schließen
+
+# Funding Rate Filter (Contrarian bei extremer Funding)
+USE_FUNDING_RATE_FILTER = True        # Funding Rate Filter aktivieren
+FUNDING_RATE_THRESHOLD = 0.01         # Ab 0.01% (1% annualisiert) als extrem
+
 # Mean Reversion Strategie (automatisch)
 AUTO_BUY_ENABLED = True           # Automatisch kaufen
 BUY_LOSER_THRESHOLD = -7.0        # Kaufe Coins ab -7% (gelockert von -10%)
