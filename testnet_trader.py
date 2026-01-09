@@ -1247,6 +1247,87 @@ class BinanceTestnetTrader:
 
         return {"direction": direction, "btc_change": btc_change, "eth_change": eth_change}
 
+    def get_fear_greed_index(self) -> dict:
+        """
+        Holt den aktuellen Fear & Greed Index von alternative.me
+        Returns: {"value": 0-100, "classification": str, "timestamp": str}
+        """
+        try:
+            url = "https://api.alternative.me/fng/"
+            response = self.session.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("data"):
+                    fng = data["data"][0]
+                    return {
+                        "value": int(fng.get("value", 50)),
+                        "classification": fng.get("value_classification", "Neutral"),
+                        "timestamp": fng.get("timestamp", "")
+                    }
+        except Exception as e:
+            print(f"  ⚠️ Fear & Greed API Error: {e}")
+
+        # Fallback: Neutral
+        return {"value": 50, "classification": "Neutral", "timestamp": ""}
+
+    def get_dynamic_position_limits(self) -> dict:
+        """
+        Berechnet dynamische Long/Short Limits basierend auf Fear & Greed Index.
+
+        Logik (Contrarian):
+        - Extreme Fear (0-20): Mehr Longs erlaubt (Kaufgelegenheit)
+        - Extreme Greed (80-100): Mehr Shorts erlaubt (Überkauft)
+
+        Returns: {"max_longs": int, "max_shorts": int, "reason": str}
+        """
+        total_positions = config.MAX_OPEN_POSITIONS
+
+        # Versuche Fear & Greed Index zu holen
+        fng = self.get_fear_greed_index()
+        value = fng["value"]
+
+        # Fallback auf BTC/ETH Trend wenn F&G nicht verfügbar
+        if value == 50 and fng["classification"] == "Neutral":
+            # Prüfe BTC/ETH Trend als Fallback
+            market = self.get_market_trend()
+            if market["direction"] in ["BEARISH", "WEAK_BEARISH"]:
+                value = 30  # Simuliere Fear
+            elif market["direction"] in ["BULLISH", "WEAK_BULLISH"]:
+                value = 70  # Simuliere Greed
+
+        # Berechne Verteilung (Contrarian-Ansatz)
+        # Fear = mehr Longs, Greed = mehr Shorts
+        # Skala: 0-100 → Longs bekommen mehr bei niedrigem Wert
+
+        # Dezile: 0-10, 10-20, ..., 90-100
+        decile = min(9, value // 10)  # 0-9
+
+        # Bei extremer Fear (Decile 0-2): Mehr Longs
+        # Bei extremer Greed (Decile 7-9): Mehr Shorts
+        # Mitte (Decile 3-6): Ausgeglichen
+
+        if decile <= 2:  # Extreme Fear (0-30)
+            # 70% Longs, 30% Shorts
+            long_ratio = 0.7 + (2 - decile) * 0.1  # 0.7, 0.8, 0.9
+        elif decile >= 7:  # Extreme Greed (70-100)
+            # 30% Longs, 70% Shorts
+            long_ratio = 0.3 - (decile - 7) * 0.1  # 0.3, 0.2, 0.1
+        else:  # Neutral (30-70)
+            long_ratio = 0.5
+
+        max_longs = max(1, int(total_positions * long_ratio))
+        max_shorts = max(1, total_positions - max_longs)
+
+        reason = f"F&G: {value} ({fng['classification']}) → {max_longs}L/{max_shorts}S"
+
+        return {
+            "max_longs": max_longs,
+            "max_shorts": max_shorts,
+            "fear_greed": value,
+            "classification": fng["classification"],
+            "reason": reason
+        }
+
     def is_trade_allowed_by_market(self, trade_side: str) -> tuple:
         """
         Prüft ob Trade-Richtung vom Markt erlaubt ist.
@@ -1692,7 +1773,12 @@ def run_testnet_auto_trading():
             # Zähle offene Positionen
             long_count = len([p for p in trader.positions.values() if p.side == "LONG"])
             short_count = len([p for p in trader.positions.values() if p.side == "SHORT"])
-            max_per_side = config.MAX_OPEN_POSITIONS // 2  # Dynamisches Limit pro Seite
+
+            # Dynamische Limits basierend auf Fear & Greed Index
+            limits = trader.get_dynamic_position_limits()
+            max_longs = limits["max_longs"]
+            max_shorts = limits["max_shorts"]
+            print(f"  📊 {limits['reason']}")
 
             # 2. Markt-Check (HTF Supertrend oder BTC/ETH)
             long_allowed, long_reason = trader.is_trade_allowed_by_market("LONG")
@@ -1712,12 +1798,12 @@ def run_testnet_auto_trading():
                 print(f"  ⛔ Keine Shorts: {short_reason}")
 
             # 3. BREAKOUT DETECTION (wenn aktiviert)
-            if config.USE_BREAKOUT_DETECTION and (long_count < max_per_side or short_count < max_per_side):
+            if config.USE_BREAKOUT_DETECTION and (long_count < max_longs or short_count < max_shorts):
                 print(f"\n[{timestamp}] 🔍 Suche Breakout-Signale...")
                 breakout_signals = trader.get_breakout_signals(5)
 
                 for coin in breakout_signals:
-                    if coin["breakout"] == "BREAKOUT_UP" and long_count < max_per_side and long_allowed:
+                    if coin["breakout"] == "BREAKOUT_UP" and long_count < max_longs and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 🚀 BREAKOUT LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (über {config.BREAKOUT_LOOKBACK_DAYS}-Tage High)")
@@ -1726,7 +1812,7 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < max_per_side and short_allowed:
+                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < max_shorts and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 💥 BREAKOUT SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (unter {config.BREAKOUT_LOOKBACK_DAYS}-Tage Low)")
@@ -1736,12 +1822,12 @@ def run_testnet_auto_trading():
                                 break
 
             # 3b. TREND-FOLLOWING (Fallback wenn kein Breakout)
-            elif config.USE_TREND_FILTER and (long_count < max_per_side or short_count < max_per_side):
+            elif config.USE_TREND_FILTER and (long_count < max_longs or short_count < max_shorts):
                 print(f"\n[{timestamp}] 🔍 Suche Trend-Signale...")
                 trend_signals = trader.get_trend_signals(5)
 
                 for coin in trend_signals:
-                    if coin["trend"] == "UP" and long_count < max_per_side and long_allowed:
+                    if coin["trend"] == "UP" and long_count < max_longs and long_allowed:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 📈 TREND LONG: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage UP)")
@@ -1750,7 +1836,7 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["trend"] == "DOWN" and short_count < max_per_side and short_allowed:
+                    elif coin["trend"] == "DOWN" and short_count < max_shorts and short_allowed:
                         key = f"{coin['symbol']}_SHORT"
                         if key not in trader.positions:
                             print(f"\n[{timestamp}] 📉 TREND SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage DOWN)")
@@ -1763,7 +1849,7 @@ def run_testnet_auto_trading():
             # Nur wenn Trend-Filter aus ist ODER keine Trend-Signale gefunden wurden
 
             # LONG: Buy the Dip
-            if long_count < max_per_side and long_allowed:
+            if long_count < max_longs and long_allowed:
                 losers = trader.get_top_losers(5)
                 for coin in losers:
                     key = f"{coin['symbol']}_LONG"
@@ -1796,7 +1882,7 @@ def run_testnet_auto_trading():
                             break
 
             # SHORT: Fade the Pump
-            if short_count < max_per_side and short_allowed:
+            if short_count < max_shorts and short_allowed:
                 gainers = trader.get_top_gainers(5)
                 for coin in gainers:
                     key = f"{coin['symbol']}_SHORT"
