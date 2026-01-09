@@ -55,6 +55,8 @@ class FilterStats:
             "rsi": {"blocked": 0, "would_win": 0, "would_lose": 0},
             "trend": {"blocked": 0, "would_win": 0, "would_lose": 0},
             "supertrend_entry": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "kama": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "jma": {"blocked": 0, "would_win": 0, "would_lose": 0},
         }
         self.passed_trades = {"total": 0, "wins": 0, "losses": 0}
         self._load_stats()
@@ -207,6 +209,8 @@ class FilterStats:
             "rsi": {"blocked": 0, "would_win": 0, "would_lose": 0},
             "trend": {"blocked": 0, "would_win": 0, "would_lose": 0},
             "supertrend_entry": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "kama": {"blocked": 0, "would_win": 0, "would_lose": 0},
+            "jma": {"blocked": 0, "would_win": 0, "would_lose": 0},
         }
         self.passed_trades = {"total": 0, "wins": 0, "losses": 0}
         self._save_stats()
@@ -1060,6 +1064,81 @@ class BinanceTestnetTrader:
                 return (True, f"Preis {abs(distance_atr):.1f}x ATR unter ST → OK ✓")
 
         return (True, "Supertrend OK")
+
+    def check_kama_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+        """
+        Prüft ob KAMA (Kaufman Adaptive Moving Average) einen Entry erlaubt.
+        KAMA passt sich der Marktvolatilität an - smooth in Seitwärtsmärkten, reaktiv in Trends.
+        Returns: (erlaubt, grund)
+        """
+        if not config.USE_KAMA_FILTER:
+            return (True, "KAMA Filter deaktiviert")
+
+        # Hole Klines
+        klines = self.get_klines(symbol, config.KAMA_TIMEFRAME, config.KAMA_PERIOD + 50)
+        if len(klines) < config.KAMA_PERIOD + 10:
+            return (True, "Nicht genug Daten für KAMA")
+
+        # Berechne KAMA
+        kama_result = self.calculate_kama(
+            klines,
+            config.KAMA_PERIOD,
+            config.KAMA_FAST,
+            config.KAMA_SLOW
+        )
+
+        kama_trend = kama_result.get("trend", "NEUTRAL")
+
+        if side == "LONG":
+            # Für LONG: KAMA sollte UP oder NEUTRAL sein
+            if kama_trend == "DOWN":
+                return (False, f"KAMA bearish → kein Long")
+            return (True, f"KAMA {kama_trend} ✓")
+
+        elif side == "SHORT":
+            # Für SHORT: KAMA sollte DOWN oder NEUTRAL sein
+            if kama_trend == "UP":
+                return (False, f"KAMA bullish → kein Short")
+            return (True, f"KAMA {kama_trend} ✓")
+
+        return (True, "KAMA OK")
+
+    def check_jma_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+        """
+        Prüft ob JMA (Jurik Moving Average) einen Entry erlaubt.
+        JMA ist sehr smooth mit wenig Lag - gut für Trendbestätigung.
+        Returns: (erlaubt, grund)
+        """
+        if not config.USE_JMA_FILTER:
+            return (True, "JMA Filter deaktiviert")
+
+        # Hole Klines
+        klines = self.get_klines(symbol, config.JMA_TIMEFRAME, config.JMA_PERIOD + 50)
+        if len(klines) < config.JMA_PERIOD + 10:
+            return (True, "Nicht genug Daten für JMA")
+
+        # Berechne JMA
+        jma_result = self.calculate_jma(
+            klines,
+            config.JMA_PERIOD,
+            config.JMA_PHASE
+        )
+
+        jma_trend = jma_result.get("trend", "NEUTRAL")
+
+        if side == "LONG":
+            # Für LONG: JMA sollte UP oder NEUTRAL sein
+            if jma_trend == "DOWN":
+                return (False, f"JMA bearish → kein Long")
+            return (True, f"JMA {jma_trend} ✓")
+
+        elif side == "SHORT":
+            # Für SHORT: JMA sollte DOWN oder NEUTRAL sein
+            if jma_trend == "UP":
+                return (False, f"JMA bullish → kein Short")
+            return (True, f"JMA {jma_trend} ✓")
+
+        return (True, "JMA OK")
 
     def check_volume_filter(self, symbol: str) -> Tuple[bool, str]:
         """
@@ -2278,6 +2357,22 @@ def run_testnet_auto_trading():
                                 trader.filter_stats.record_blocked(coin["symbol"], "LONG", "funding", coin["price"])
                                 continue
 
+                        # KAMA Filter: Adaptive MA Trend
+                        if config.USE_KAMA_FILTER:
+                            kama_ok, kama_reason = trader.check_kama_entry(coin["symbol"], "LONG")
+                            if not kama_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {kama_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "LONG", "kama", coin["price"])
+                                continue
+
+                        # JMA Filter: Smooth MA Trend
+                        if config.USE_JMA_FILTER:
+                            jma_ok, jma_reason = trader.check_jma_entry(coin["symbol"], "LONG")
+                            if not jma_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {jma_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "LONG", "jma", coin["price"])
+                                continue
+
                         print(f"\n[{timestamp}] 📉 MEAN REV LONG: {coin['base']} @ {coin['change_percent']:.1f}%")
                         result = trader.futures_long(coin["symbol"], config.MAX_POSITION_SIZE)
                         if result:
@@ -2332,6 +2427,22 @@ def run_testnet_auto_trading():
                             if not fund_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {fund_reason}")
                                 trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "funding", coin["price"])
+                                continue
+
+                        # KAMA Filter: Adaptive MA Trend
+                        if config.USE_KAMA_FILTER:
+                            kama_ok, kama_reason = trader.check_kama_entry(coin["symbol"], "SHORT")
+                            if not kama_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {kama_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "kama", coin["price"])
+                                continue
+
+                        # JMA Filter: Smooth MA Trend
+                        if config.USE_JMA_FILTER:
+                            jma_ok, jma_reason = trader.check_jma_entry(coin["symbol"], "SHORT")
+                            if not jma_ok:
+                                print(f"  ⏭️  Skip {coin['base']} - {jma_reason}")
+                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "jma", coin["price"])
                                 continue
 
                         print(f"\n[{timestamp}] 📈 MEAN REV SHORT: {coin['base']} @ +{coin['change_percent']:.1f}%")

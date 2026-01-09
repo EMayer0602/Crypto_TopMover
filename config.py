@@ -58,6 +58,19 @@ ENTRY_SUPERTREND_PERIOD = 10          # ATR Periode
 ENTRY_SUPERTREND_MULTIPLIER = 3.0     # ATR Multiplikator
 ENTRY_MAX_ATR_DISTANCE = 2.0          # Max. Abstand in ATR (gelockert von 1.5)
 
+# KAMA Entry Filter (Kaufman Adaptive Moving Average)
+USE_KAMA_FILTER = True                # KAMA als Entry-Filter aktivieren
+KAMA_TIMEFRAME = "15m"                # Timeframe für KAMA
+KAMA_PERIOD = 10                      # Effizienz-Periode
+KAMA_FAST = 2                         # Schnelle EMA Periode
+KAMA_SLOW = 30                        # Langsame EMA Periode
+
+# JMA Entry Filter (Jurik Moving Average)
+USE_JMA_FILTER = True                 # JMA als Entry-Filter aktivieren
+JMA_TIMEFRAME = "15m"                 # Timeframe für JMA
+JMA_PERIOD = 7                        # Glättungsperiode
+JMA_PHASE = 50                        # Phase (-100 bis +100)
+
 # Volume Filter (bestätigt echte Bewegungen)
 USE_VOLUME_FILTER = True              # Volume Filter aktivieren
 VOLUME_MIN_RATIO = 1.5                # Min. Volume Ratio (1.5 = 50% über Durchschnitt)
