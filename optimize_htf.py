@@ -479,40 +479,101 @@ class HTFOptimizer:
         print(f"{'='*50}")
 
 
-def get_active_symbols() -> List[str]:
-    """Holt aktive Trading-Symbole von Binance"""
-    url = "https://api.binance.com/api/v3/ticker/24hr"
+# Alle Binance Futures USDT-M Perpetual Symbole (Stand: Jan 2025)
+FUTURES_SYMBOLS = [
+    "1000BONKUSDT", "1000FLOKIUSDT", "1000LUNCUSDT", "1000PEPEUSDT", "1000SHIBUSDT",
+    "1000XECUSDT", "1INCHUSDT", "AAVEUSDT", "ACEUSDT", "ACHUSDT", "ADAUSDT",
+    "AEVOUSDT", "AGIXUSDT", "AGLDUSDT", "AIUSDT", "ALGOUSDT", "ALICEUSDT",
+    "ALPACAUSDT", "ALPHAUSDT", "ALTUSDT", "AMBUSDT", "ANKRUSDT", "ANTUSDT",
+    "APEUSDT", "API3USDT", "APTUSDT", "ARBUSDT", "ARKMUSDT", "ARKUSDT",
+    "ARPAUSDT", "ARUSDT", "ASTRUSDT", "ATAUSDT", "ATOMUSDT", "AUCTIONUSDT",
+    "AUDIOUSDT", "AVAXUSDT", "AXLUSDT", "AXSUSDT", "BADGERUSDT", "BAKEUSDT",
+    "BALUSDT", "BANDUSDT", "BATUSDT", "BBUSDT", "BCHUSDT", "BEAMXUSDT",
+    "BELUSDT", "BICOUSDT", "BIGTIMEUSDT", "BLURUSDT", "BLZUSDT", "BNBUSDT",
+    "BNTUSDT", "BOMEUSDT", "BONDUSDT", "BONKUSDT", "BSVUSDT", "BTCUSDT",
+    "C98USDT", "CAKEUSDT", "CELOUSDT", "CELRUSDT", "CFXUSDT", "CHRUSDT",
+    "CHZUSDT", "CKBUSDT", "COMBOUSDT", "COMPUSDT", "COREUSDT", "COTIUSDT",
+    "CRVUSDT", "CTSIUSDT", "CVCUSDT", "CYBERUSDT", "DARUSDT", "DASHUSDT",
+    "DENTUSDT", "DGBUSDT", "DODOXUSDT", "DOGEUSDT", "DOTUSDT", "DUSKUSDT",
+    "DYDXUSDT", "DYMUSDT", "EDUUSDT", "EGLDUSDT", "ENAUSDT", "ENJUSDT",
+    "ENSUSDT", "EOSUSDT", "ETCUSDT", "ETHFIUSDT", "ETHUSDT", "ETHWUSDT",
+    "FETUSDT", "FIDAUSDT", "FILUSDT", "FLMUSDT", "FLOWUSDT", "FLRUSDT",
+    "FORTHUSDT", "FRONTUSDT", "FTMUSDT", "FXSUSDT", "GALAUSDT", "GASUSDT",
+    "GFTUSDT", "GLMRUSDT", "GLMUSDT", "GMTUSDT", "GMXUSDT", "GRTUSDT",
+    "GTCUSDT", "GUNUSDT", "HBARUSDT", "HFTUSDT", "HIFIUSDT", "HIGHUSDT",
+    "HOOKUSDT", "HOTUSDT", "ICPUSDT", "ICXUSDT", "IDEXUSDT", "IDUSDT",
+    "ILVUSDT", "IMXUSDT", "INJUSDT", "IOSTUSDT", "IOTAUSDT", "IOTXUSDT",
+    "JASMYUSDT", "JOEUSDT", "JTOUSDT", "JUPUSDT", "KASUSDT", "KAVAUSDT",
+    "KDAUSDT", "KEYUSDT", "KLAYUSDT", "KNCUSDT", "KSMUSDT", "LDOUSDT",
+    "LEVERUSDT", "LINAUSDT", "LINKUSDT", "LISTAUSDT", "LITUSDT", "LOOKSUSDT",
+    "LOOMUSDT", "LPTUSDT", "LQTYUSDT", "LRCUSDT", "LSKUSDT", "LTCUSDT",
+    "LUNA2USDT", "MAGICUSDT", "MANAUSDT", "MANTAUSDT", "MASKUSDT", "MATICUSDT",
+    "MAVUSDT", "MBLUSDT", "MDTUSDT", "MEMEUSDT", "METISUSDT", "MINAUSDT",
+    "MKRUSDT", "MOVRUSDT", "MTLUSDT", "NEARUSDT", "NEOUSDT", "NFPUSDT",
+    "NKNUSDT", "NMRUSDT", "NOTUSDT", "NTRNUSDT", "OCEANUSDT", "OGNUSDT",
+    "OGUSDT", "OMGUSDT", "OMUSDT", "ONDOUSDT", "ONEUSDT", "ONGUSDT",
+    "ONTUSDT", "OPUSDT", "ORBSUSDT", "ORDIUSDT", "OXTUSDT", "PAXGUSDT",
+    "PENDLEUSDT", "PEOPLEUSDT", "PERPUSDT", "PHBUSDT", "PIXELUSDT", "POLYXUSDT",
+    "PORTALUSDT", "POWRUSDT", "PYTHUSDT", "QNTUSDT", "QTUMUSDT", "RADUSDT",
+    "RAREUSDT", "RDNTUSDT", "REEFUSDT", "RENDERUSDT", "RENUSDT", "REQUSDT",
+    "RIFUSDT", "RLCUSDT", "RNDRUSDT", "ROSEUSDT", "RPLUSDT", "RSRUSDT",
+    "RUNEUSDT", "RVNUSDT", "SANDUSDT", "SCUSDT", "SEIUSDT", "SFPUSDT",
+    "SKLUSDT", "SLPUSDT", "SNXUSDT", "SOLUSDT", "SPELLUSDT", "SSVUSDT",
+    "STEEMUSDT", "STGUSDT", "STMXUSDT", "STORJUSDT", "STPTUSDT", "STRAXUSDT",
+    "STRKUSDT", "STXUSDT", "SUIUSDT", "SUPERUSDT", "SUSHIUSDT", "SXPUSDT",
+    "THETAUSDT", "TIAUSDT", "TLMUSDT", "TOKENUSDT", "TOMOUSDT", "TONUSDT",
+    "TRBUSDT", "TRUUSDT", "TRXUSDT", "TUSDT", "TWTUSDT", "UMAUSDT",
+    "UNFIUSDT", "UNIUSDT", "USDCUSDT", "USTCUSDT", "VANRYUSDT", "VETUSDT",
+    "VGXUSDT", "VIBUSDT", "VIRTUALUSDT", "WAXPUSDT", "WIFUSDT", "WLDUSDT",
+    "WUSDT", "XAIUSDT", "XEMUSDT", "XLMUSDT", "XMRUSDT", "XRPUSDT",
+    "XTZUSDT", "XVGUSDT", "XVSUSDT", "YFIUSDT", "YGGUSDT", "ZECUSDT",
+    "ZENUSDT", "ZETAUSDT", "ZILUSDT", "ZROUSDT", "ZRXUSDT"
+]
+
+
+def get_futures_symbols() -> List[str]:
+    """Holt ALLE Binance Futures USDT-M Symbole"""
+    # Versuche Live-API
+    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 
     try:
         response = requests.get(url, timeout=10)
-        if response.status_code != 200:
-            return []
+        if response.status_code == 200:
+            data = response.json()
+            symbols = []
 
-        tickers = response.json()
+            for s in data.get("symbols", []):
+                symbol = s.get("symbol", "")
+                status = s.get("status", "")
+                contract_type = s.get("contractType", "")
 
-        # Filter: USDT Paare mit gutem Volume
-        symbols = []
-        for t in tickers:
-            symbol = t["symbol"]
-            if not symbol.endswith("USDT"):
-                continue
+                if status != "TRADING":
+                    continue
+                if contract_type != "PERPETUAL":
+                    continue
+                if not symbol.endswith("USDT"):
+                    continue
 
-            volume = float(t.get("quoteVolume", 0))
-            if volume < 10000000:  # Min 10M USDT Volume
-                continue
+                base = symbol.replace("USDT", "")
+                if base in ["USDC", "BUSD", "DAI", "TUSD", "FDUSD", "EUR"]:
+                    continue
 
-            # Keine Stablecoins
-            base = symbol.replace("USDT", "")
-            if base in ["USDC", "BUSD", "DAI", "TUSD", "FDUSD"]:
-                continue
+                symbols.append(symbol)
 
-            symbols.append(symbol)
-
-        return symbols[:30]  # Top 30
+            if symbols:
+                return sorted(symbols)
 
     except Exception as e:
-        print(f"Error: {e}")
-        return []
+        print(f"  API nicht erreichbar: {e}")
+
+    # Fallback: Statische Liste
+    print("  Verwende statische Symbol-Liste (API nicht verfügbar)")
+    return FUTURES_SYMBOLS
+
+
+def get_active_symbols() -> List[str]:
+    """Alias für Kompatibilität - verwendet jetzt Futures Symbole"""
+    return get_futures_symbols()
 
 
 def analyze_filters():
