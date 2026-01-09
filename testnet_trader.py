@@ -2390,10 +2390,23 @@ if __name__ == "__main__":
 
         elif mode == "stats":
             print("\n" + "="*60)
-            print("  FILTER STATISTIKEN")
+            print("  FILTER STATISTIKEN (Live - Ctrl+C zum Beenden)")
             print("="*60)
             stats = FilterStats()
-            print(stats.get_summary())
+            try:
+                while True:
+                    # Terminal clearen (ANSI escape)
+                    print("\033[2J\033[H", end="")
+                    print("="*60)
+                    print("  FILTER STATISTIKEN (aktualisiert alle 30s)")
+                    print("  Drücke Ctrl+C zum Beenden")
+                    print("="*60)
+                    stats._load_stats()  # Neu laden
+                    print(stats.get_summary())
+                    print(f"\n  Letztes Update: {datetime.now().strftime('%H:%M:%S')}")
+                    time.sleep(30)
+            except KeyboardInterrupt:
+                print("\n\n  Stats-Monitor beendet.")
 
         elif mode == "resetstats":
             print("\n" + "="*60)
