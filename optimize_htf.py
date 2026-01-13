@@ -595,6 +595,7 @@ def backtest_filter_combinations():
     """
     Testet verschiedene Filter-Kombinationen per Backtest.
     Zeigt welche Kombination am besten performed.
+    Inkl. HTF Supertrend (BTC als Markt-Filter).
     """
     print("\n" + "="*60)
     print("  FILTER-KOMBINATIONS-ANALYSE (Backtest)")
@@ -605,23 +606,30 @@ def backtest_filter_combinations():
 
     # Test-Symbole (diverse Marktbedingungen)
     test_symbols = [
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT",
+        "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT",
         "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT"
     ]
 
-    # Filter-Kombinationen zum Testen
+    # Filter-Kombinationen zum Testen (inkl. HTF)
     combinations = [
-        {"name": "Nur Supertrend", "st": True, "kama": False, "jma": False},
-        {"name": "ST + KAMA", "st": True, "kama": True, "jma": False},
-        {"name": "ST + JMA", "st": True, "kama": False, "jma": True},
-        {"name": "ST + KAMA + JMA", "st": True, "kama": True, "jma": True},
-        {"name": "Nur KAMA", "st": False, "kama": True, "jma": False},
-        {"name": "KAMA + JMA", "st": False, "kama": True, "jma": True},
+        {"name": "Nur Supertrend", "st": True, "kama": False, "jma": False, "htf": False},
+        {"name": "ST + HTF", "st": True, "kama": False, "jma": False, "htf": True},
+        {"name": "ST + KAMA", "st": True, "kama": True, "jma": False, "htf": False},
+        {"name": "ST + KAMA + HTF", "st": True, "kama": True, "jma": False, "htf": True},
+        {"name": "ST + JMA", "st": True, "kama": False, "jma": True, "htf": False},
+        {"name": "ST + JMA + HTF", "st": True, "kama": False, "jma": True, "htf": True},
+        {"name": "ST + KAMA + JMA", "st": True, "kama": True, "jma": True, "htf": False},
+        {"name": "ALL (ST+KAMA+JMA+HTF)", "st": True, "kama": True, "jma": True, "htf": True},
     ]
 
-    print(f"\n  Lade Daten für {len(test_symbols)} Symbole...")
+    print(f"\n  Lade Daten...")
 
-    # Sammle Klines für alle Symbole
+    # Lade BTC für HTF Filter (4h Timeframe)
+    btc_klines_4h = optimizer.get_klines("BTCUSDT", "4h", 500)
+    btc_st_4h = optimizer.calculate_supertrend(btc_klines_4h, 10, 3.0) if btc_klines_4h else []
+    print(f"    BTCUSDT (HTF 4h): {len(btc_klines_4h)} Kerzen")
+
+    # Sammle Klines für alle Test-Symbole
     all_klines = {}
     for symbol in test_symbols:
         klines = optimizer.get_klines(symbol, "1h", 1000)
@@ -659,6 +667,7 @@ def backtest_filter_combinations():
 
             for i in range(20, min_len):
                 close = klines[i]["close"]
+                candle_time = klines[i]["open_time"]
 
                 if i >= len(st_results) or i >= len(kama_results) or i >= len(jma_results):
                     continue
@@ -669,6 +678,14 @@ def backtest_filter_combinations():
 
                 if st is None or kama is None or jma is None:
                     continue
+
+                # HTF Filter: Finde passenden BTC 4h Candle
+                btc_dir = "NEUTRAL"
+                if combo["htf"] and btc_st_4h:
+                    # Map 1h candle to 4h candle (divide timestamp by 4)
+                    btc_idx = min(i // 4, len(btc_st_4h) - 1)
+                    if btc_idx >= 0 and btc_st_4h[btc_idx]:
+                        btc_dir = btc_st_4h[btc_idx].get("direction", "NEUTRAL")
 
                 # Position Management
                 if position:
@@ -689,12 +706,16 @@ def backtest_filter_combinations():
                     kama_trend = kama.get("trend", "NEUTRAL") if combo["kama"] else "UP"
                     jma_trend = jma.get("trend", "NEUTRAL") if combo["jma"] else "UP"
 
+                    # HTF Filter: Nur LONG wenn BTC UP, nur SHORT wenn BTC DOWN
+                    htf_long_ok = not combo["htf"] or btc_dir == "UP"
+                    htf_short_ok = not combo["htf"] or btc_dir == "DOWN"
+
                     # LONG
-                    if st_dir == "UP" and kama_trend != "DOWN" and jma_trend != "DOWN":
+                    if htf_long_ok and st_dir == "UP" and kama_trend != "DOWN" and jma_trend != "DOWN":
                         position = {"side": "LONG", "entry_price": close}
 
                     # SHORT
-                    elif st_dir == "DOWN" and kama_trend != "UP" and jma_trend != "UP":
+                    elif htf_short_ok and st_dir == "DOWN" and kama_trend != "UP" and jma_trend != "UP":
                         position = {"side": "SHORT", "entry_price": close}
 
             # Aggregiere Ergebnisse
