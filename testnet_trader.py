@@ -2,7 +2,7 @@
 Binance Testnet Trader
 ======================
 Echte API Calls auf dem Testnet (Spielgeld).
-Unterstützt LONG (Spot) und SHORT (Futures).
+Unterstützt LONG Futures Trading.
 """
 
 import hmac
@@ -21,12 +21,12 @@ import config
 class TestnetPosition:
     """Eine offene Position"""
     symbol: str
-    side: str  # LONG oder SHORT
+    side: str  # LONG
     entry_price: float
     quantity: float
     entry_time: str
     order_id: str
-    peak_price: float = 0.0  # Höchstpreis (LONG) / Tiefstpreis (SHORT) für Trailing Stop
+    peak_price: float = 0.0  # Höchstpreis für Trailing Stop
     partial_closed: bool = False  # Partial TP bereits genommen
 
 
@@ -140,11 +140,8 @@ class FilterStats:
             bt.outcome_price = current_price
             bt.checked = True
 
-            # Berechne ob es ein Gewinner gewesen wäre
-            if bt.side == "LONG":
-                pnl = (current_price - bt.block_price) / bt.block_price * 100
-            else:  # SHORT
-                pnl = (bt.block_price - current_price) / bt.block_price * 100
+            # Berechne ob es ein Gewinner gewesen wäre (LONG only)
+            pnl = (current_price - bt.block_price) / bt.block_price * 100
 
             # Vereinfachte Logik: Gewinner wenn > 2%, Verlierer wenn < -1%
             bt.would_be_winner = pnl >= 2.0
@@ -423,7 +420,7 @@ class BinanceTestnetTrader:
 
         return None
 
-    # === FUTURES TRADING (SHORT) ===
+    # === FUTURES TRADING ===
 
     def get_futures_balance(self) -> float:
         """Holt Futures USDT Balance"""
@@ -461,95 +458,11 @@ class BinanceTestnetTrader:
                     return s.get("quantityPrecision", 3)
         return 3  # Default
 
-    def futures_short(self, symbol: str, usdt_amount: float) -> Optional[dict]:
-        """Öffnet SHORT Position (Futures)"""
-        # Erst Preis holen
-        price = self._get_futures_price(symbol)
-        if not price:
-            print(f"❌ Konnte Preis für {symbol} nicht abrufen")
-            return None
-
-        # Precision für dieses Symbol holen
-        precision = self._get_futures_precision(symbol)
-        quantity = round(usdt_amount / price, precision)
-
-        if quantity <= 0:
-            print(f"❌ Quantity zu klein für {symbol}")
-            return None
-
-        url = f"{self.futures_url}/fapi/v1/order"
-        params = {
-            "symbol": symbol,
-            "side": "SELL",  # SHORT = SELL to open
-            "type": "MARKET",
-            "quantity": quantity,
-        }
-
-        result = self._request("POST", url, params, signed=True)
-        if result:
-            self.positions[f"{symbol}_SHORT"] = TestnetPosition(
-                symbol=symbol,
-                side="SHORT",
-                entry_price=price,
-                quantity=round(quantity, 3),
-                entry_time=datetime.now().isoformat(),
-                order_id=str(result.get("orderId", ""))
-            )
-            self._save_state()
-
-            print(f"✅ SHORT: {quantity:.4f} {symbol.replace('USDT', '')} @ ${price:.4f}")
-            return result
-
-        return None
-
-    def futures_close_short(self, symbol: str) -> Optional[dict]:
-        """Schließt SHORT Position"""
-        key = f"{symbol}_SHORT"
+    def futures_partial_close(self, symbol: str, close_ratio: float = 0.5) -> Optional[dict]:
+        """Schließt einen Teil der LONG Position (Partial Take Profit)"""
+        key = f"{symbol}_LONG"
         if key not in self.positions:
-            print(f"❌ Keine SHORT Position in {symbol}")
-            return None
-
-        position = self.positions[key]
-
-        url = f"{self.futures_url}/fapi/v1/order"
-        params = {
-            "symbol": symbol,
-            "side": "BUY",  # SHORT schließen = BUY
-            "type": "MARKET",
-            "quantity": position.quantity,
-        }
-
-        result = self._request("POST", url, params, signed=True)
-        if result:
-            exit_price = self._get_futures_price(symbol)
-            # Bei SHORT: Gewinn wenn Preis gefallen
-            pnl = (position.entry_price - exit_price) / position.entry_price * 100
-
-            self.trade_history.append({
-                "symbol": symbol,
-                "side": "SHORT",
-                "entry_price": position.entry_price,
-                "exit_price": exit_price,
-                "quantity": position.quantity,
-                "pnl_percent": pnl,
-                "timestamp": datetime.now().isoformat()
-            })
-
-            del self.positions[key]
-            self._save_state()
-
-            emoji = "🟢" if pnl >= 0 else "🔴"
-            print(f"{emoji} CLOSED SHORT: {position.quantity:.4f} {symbol.replace('USDT', '')} "
-                  f"@ ${exit_price:.4f} | PnL: {pnl:+.2f}%")
-            return result
-
-        return None
-
-    def futures_partial_close(self, symbol: str, side: str, close_ratio: float = 0.5) -> Optional[dict]:
-        """Schließt einen Teil der Position (Partial Take Profit)"""
-        key = f"{symbol}_{side}"
-        if key not in self.positions:
-            print(f"❌ Keine {side} Position in {symbol}")
+            print(f"❌ Keine LONG Position in {symbol}")
             return None
 
         position = self.positions[key]
@@ -564,12 +477,9 @@ class BinanceTestnetTrader:
 
         url = f"{self.futures_url}/fapi/v1/order"
 
-        # LONG schließen = SELL, SHORT schließen = BUY
-        close_side = "SELL" if side == "LONG" else "BUY"
-
         params = {
             "symbol": symbol,
-            "side": close_side,
+            "side": "SELL",  # LONG schließen = SELL
             "type": "MARKET",
             "quantity": partial_qty,
         }
@@ -579,10 +489,7 @@ class BinanceTestnetTrader:
             exit_price = self._get_futures_price(symbol)
 
             # PnL berechnen
-            if side == "LONG":
-                pnl = (exit_price - position.entry_price) / position.entry_price * 100
-            else:  # SHORT
-                pnl = (position.entry_price - exit_price) / position.entry_price * 100
+            pnl = (exit_price - position.entry_price) / position.entry_price * 100
 
             # Position aktualisieren (reduzierte Quantity)
             position.quantity = round(position.quantity - partial_qty, precision)
@@ -680,7 +587,7 @@ class BinanceTestnetTrader:
         return None
 
     def close_all_positions(self) -> dict:
-        """Schließt ALLE offenen Positionen sofort"""
+        """Schließt ALLE offenen LONG Positionen sofort"""
         print(f"\n{'='*60}")
         print("  ⚠️  CLOSE ALL POSITIONS")
         print(f"{'='*60}")
@@ -701,12 +608,8 @@ class BinanceTestnetTrader:
             if not pos:
                 continue
 
-            print(f"\n  Schließe {pos.side} {pos.symbol}...")
-
-            if pos.side == "LONG":
-                result = self.futures_close_long(pos.symbol)
-            else:  # SHORT
-                result = self.futures_close_short(pos.symbol)
+            print(f"\n  Schließe LONG {pos.symbol}...")
+            result = self.futures_close_long(pos.symbol)
 
             if result:
                 closed += 1
@@ -791,164 +694,63 @@ class BinanceTestnetTrader:
 
         return sorted(usdt_pairs, key=lambda x: x["change_percent"])[:limit]
 
-    def get_top_gainers(self, limit: int = 10) -> List[dict]:
-        """Holt Top Gainers von MAINNET (für Short Signale) - nur Futures-fähige"""
-        futures_symbols = self._get_futures_symbols()
-        url = "https://api.binance.com/api/v3/ticker/24hr"
-        response = self.session.get(url)
-
-        if response.status_code != 200:
-            return []
-
-        tickers = response.json()
-        usdt_pairs = []
-
-        for t in tickers:
-            symbol = t.get("symbol", "")
-            if not symbol.endswith("USDT"):
-                continue
-
-            # NUR Symbole die auf Futures Testnet verfügbar sind
-            if symbol not in futures_symbols:
-                continue
-
-            volume = float(t.get("quoteVolume", 0))
-            if volume < config.MIN_VOLUME_USDT:
-                continue
-
-            base = symbol.replace("USDT", "")
-            if base in ["USDC", "BUSD", "DAI", "TUSD", "FDUSD"]:
-                continue
-
-            change = float(t.get("priceChangePercent", 0))
-            if change >= config.SHORT_GAINER_THRESHOLD:
-                usdt_pairs.append({
-                    "symbol": symbol,
-                    "base": base,
-                    "price": float(t.get("lastPrice", 0)),
-                    "change_percent": change,
-                    "volume_usdt": volume,
-                })
-
-        return sorted(usdt_pairs, key=lambda x: x["change_percent"], reverse=True)[:limit]
-
     # === AUTO TRADING ===
 
     def check_positions_tp_sl(self):
-        """Prüft Positionen auf TP/SL mit Trailing Stop"""
+        """Prüft LONG Positionen auf TP/SL mit Trailing Stop"""
         for key, pos in list(self.positions.items()):
-            if pos.side == "LONG":
-                current_price = self._get_futures_price(pos.symbol)
-                if not current_price:
-                    print(f"⚠️  Konnte Preis für {pos.symbol} nicht abrufen")
-                    continue
+            current_price = self._get_futures_price(pos.symbol)
+            if not current_price:
+                print(f"⚠️  Konnte Preis für {pos.symbol} nicht abrufen")
+                continue
 
-                pnl = (current_price - pos.entry_price) / pos.entry_price * 100
+            pnl = (current_price - pos.entry_price) / pos.entry_price * 100
 
-                # Trailing Stop Logik für LONG
-                if config.USE_TRAILING_STOP and pnl >= config.TRAILING_STOP_ACTIVATION:
-                    # Peak-Preis aktualisieren
-                    if pos.peak_price == 0.0 or current_price > pos.peak_price:
-                        pos.peak_price = current_price
-                        self._save_state()
+            # Trailing Stop Logik
+            if config.USE_TRAILING_STOP and pnl >= config.TRAILING_STOP_ACTIVATION:
+                # Peak-Preis aktualisieren
+                if pos.peak_price == 0.0 or current_price > pos.peak_price:
+                    pos.peak_price = current_price
+                    self._save_state()
 
-                    # Trailing Stop Level berechnen
-                    trailing_stop_level = pos.peak_price * (1 - config.TRAILING_STOP_DISTANCE / 100)
+                # Trailing Stop Level berechnen
+                trailing_stop_level = pos.peak_price * (1 - config.TRAILING_STOP_DISTANCE / 100)
 
-                    if current_price <= trailing_stop_level:
-                        pnl_at_close = (current_price - pos.entry_price) / pos.entry_price * 100
-                        print(f"🔔 TRAILING STOP für LONG {pos.symbol} ({pnl_at_close:+.2f}%)")
-                        print(f"   Peak: ${pos.peak_price:.4f} → Stop: ${trailing_stop_level:.4f} → Aktuell: ${current_price:.4f}")
-                        result = self.futures_close_long(pos.symbol)
-                        if result:
-                            self.filter_stats.record_trade_result(pnl_at_close > 0)
-                        else:
-                            print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
-                        continue
-
-                # Partial Take Profit für LONG
-                if config.USE_PARTIAL_TP and not pos.partial_closed:
-                    if pnl >= config.PARTIAL_TP_PERCENT:
-                        print(f"🎯 PARTIAL TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
-                        result = self.futures_partial_close(
-                            pos.symbol, "LONG", config.PARTIAL_TP_CLOSE_RATIO
-                        )
-                        if not result:
-                            print(f"⚠️  Partial TP fehlgeschlagen für LONG {pos.symbol}")
-                        continue  # Zum nächsten Position, nicht sofort Full TP prüfen
-
-                # Normaler TP/SL
-                if pnl >= config.TAKE_PROFIT_PERCENT:
-                    print(f"📈 TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
+                if current_price <= trailing_stop_level:
+                    pnl_at_close = (current_price - pos.entry_price) / pos.entry_price * 100
+                    print(f"🔔 TRAILING STOP für LONG {pos.symbol} ({pnl_at_close:+.2f}%)")
+                    print(f"   Peak: ${pos.peak_price:.4f} → Stop: ${trailing_stop_level:.4f} → Aktuell: ${current_price:.4f}")
                     result = self.futures_close_long(pos.symbol)
                     if result:
-                        self.filter_stats.record_trade_result(True)  # TP = Winner
+                        self.filter_stats.record_trade_result(pnl_at_close > 0)
                     else:
                         print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
-                elif pnl <= -config.STOP_LOSS_PERCENT:
-                    print(f"📉 SL erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
-                    result = self.futures_close_long(pos.symbol)
-                    if result:
-                        self.filter_stats.record_trade_result(False)  # SL = Loser
-                    else:
-                        print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
-
-            elif pos.side == "SHORT":
-                current_price = self._get_futures_price(pos.symbol)
-                if not current_price:
-                    print(f"⚠️  Konnte Preis für {pos.symbol} nicht abrufen")
                     continue
 
-                # Bei SHORT: Gewinn wenn Preis fällt
-                pnl = (pos.entry_price - current_price) / pos.entry_price * 100
+            # Partial Take Profit
+            if config.USE_PARTIAL_TP and not pos.partial_closed:
+                if pnl >= config.PARTIAL_TP_PERCENT:
+                    print(f"🎯 PARTIAL TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
+                    result = self.futures_partial_close(pos.symbol, config.PARTIAL_TP_CLOSE_RATIO)
+                    if not result:
+                        print(f"⚠️  Partial TP fehlgeschlagen für LONG {pos.symbol}")
+                    continue  # Zum nächsten Position, nicht sofort Full TP prüfen
 
-                # Trailing Stop Logik für SHORT
-                if config.USE_TRAILING_STOP and pnl >= config.TRAILING_STOP_ACTIVATION:
-                    # Peak-Preis aktualisieren (für SHORT: niedrigster Preis)
-                    if pos.peak_price == 0.0 or current_price < pos.peak_price:
-                        pos.peak_price = current_price
-                        self._save_state()
-
-                    # Trailing Stop Level berechnen (für SHORT: Preis darf nicht zu stark steigen)
-                    trailing_stop_level = pos.peak_price * (1 + config.TRAILING_STOP_DISTANCE / 100)
-
-                    if current_price >= trailing_stop_level:
-                        pnl_at_close = (pos.entry_price - current_price) / pos.entry_price * 100
-                        print(f"🔔 TRAILING STOP für SHORT {pos.symbol} ({pnl_at_close:+.2f}%)")
-                        print(f"   Low: ${pos.peak_price:.4f} → Stop: ${trailing_stop_level:.4f} → Aktuell: ${current_price:.4f}")
-                        result = self.futures_close_short(pos.symbol)
-                        if result:
-                            self.filter_stats.record_trade_result(pnl_at_close > 0)
-                        else:
-                            print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
-                        continue
-
-                # Partial Take Profit für SHORT
-                if config.USE_PARTIAL_TP and not pos.partial_closed:
-                    if pnl >= config.PARTIAL_TP_PERCENT:
-                        print(f"🎯 PARTIAL TP erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
-                        result = self.futures_partial_close(
-                            pos.symbol, "SHORT", config.PARTIAL_TP_CLOSE_RATIO
-                        )
-                        if not result:
-                            print(f"⚠️  Partial TP fehlgeschlagen für SHORT {pos.symbol}")
-                        continue  # Zum nächsten Position, nicht sofort Full TP prüfen
-
-                # Normaler TP/SL
-                if pnl >= config.SHORT_TAKE_PROFIT:
-                    print(f"📈 TP erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
-                    result = self.futures_close_short(pos.symbol)
-                    if result:
-                        self.filter_stats.record_trade_result(True)  # TP = Winner
-                    else:
-                        print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
-                elif pnl <= -config.SHORT_STOP_LOSS:
-                    print(f"📉 SL erreicht für SHORT {pos.symbol} ({pnl:+.2f}%)")
-                    result = self.futures_close_short(pos.symbol)
-                    if result:
-                        self.filter_stats.record_trade_result(False)  # SL = Loser
-                    else:
-                        print(f"❌ FEHLER: Konnte SHORT {pos.symbol} nicht schließen!")
+            # Normaler TP/SL
+            if pnl >= config.TAKE_PROFIT_PERCENT:
+                print(f"📈 TP erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
+                result = self.futures_close_long(pos.symbol)
+                if result:
+                    self.filter_stats.record_trade_result(True)  # TP = Winner
+                else:
+                    print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
+            elif pnl <= -config.STOP_LOSS_PERCENT:
+                print(f"📉 SL erreicht für LONG {pos.symbol} ({pnl:+.2f}%)")
+                result = self.futures_close_long(pos.symbol)
+                if result:
+                    self.filter_stats.record_trade_result(False)  # SL = Loser
+                else:
+                    print(f"❌ FEHLER: Konnte LONG {pos.symbol} nicht schließen!")
 
     def _get_spot_price(self, symbol: str) -> Optional[float]:
         """Holt Spot Preis"""
@@ -1017,9 +819,9 @@ class BinanceTestnetTrader:
 
         return rsi
 
-    def check_rsi_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+    def check_rsi_entry(self, symbol: str) -> Tuple[bool, str]:
         """
-        Prüft ob RSI einen Entry erlaubt.
+        Prüft ob RSI einen LONG Entry erlaubt.
         Returns: (erlaubt, grund)
         """
         if not config.USE_RSI_FILTER:
@@ -1027,23 +829,14 @@ class BinanceTestnetTrader:
 
         rsi = self.calculate_rsi(symbol, config.RSI_PERIOD)
 
-        if side == "LONG":
-            if rsi <= config.RSI_OVERSOLD:
-                return (True, f"RSI {rsi:.1f} ≤ {config.RSI_OVERSOLD} (überverkauft) ✓")
-            else:
-                return (False, f"RSI {rsi:.1f} > {config.RSI_OVERSOLD} (nicht überverkauft)")
+        if rsi <= config.RSI_OVERSOLD:
+            return (True, f"RSI {rsi:.1f} ≤ {config.RSI_OVERSOLD} (überverkauft) ✓")
+        else:
+            return (False, f"RSI {rsi:.1f} > {config.RSI_OVERSOLD} (nicht überverkauft)")
 
-        elif side == "SHORT":
-            if rsi >= config.RSI_OVERBOUGHT:
-                return (True, f"RSI {rsi:.1f} ≥ {config.RSI_OVERBOUGHT} (überkauft) ✓")
-            else:
-                return (False, f"RSI {rsi:.1f} < {config.RSI_OVERBOUGHT} (nicht überkauft)")
-
-        return (True, "RSI OK")
-
-    def check_supertrend_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+    def check_supertrend_entry(self, symbol: str) -> Tuple[bool, str]:
         """
-        Prüft ob Supertrend einen Entry erlaubt (verhindert Chasing nach Pump).
+        Prüft ob Supertrend einen LONG Entry erlaubt (verhindert Chasing nach Pump).
         DYNAMISCH: Verwendet ATR statt fester Prozente - passt sich an Volatilität an.
         Nutzt Symbol-spezifische Settings wenn verfügbar.
         Returns: (erlaubt, grund)
@@ -1091,29 +884,17 @@ class BinanceTestnetTrader:
         # Max erlaubter Abstand in ATR (config)
         max_atr_distance = config.ENTRY_MAX_ATR_DISTANCE
 
-        if side == "LONG":
-            # Für LONG: Preis sollte NAH AM oder UNTER Supertrend sein
-            if distance_atr > max_atr_distance:
-                return (False, f"Preis {distance_atr:.1f}x ATR über ST → Pump! (max {max_atr_distance}x)")
-            elif distance_atr < 0:
-                return (True, f"Preis {abs(distance_atr):.1f}x ATR unter ST → Pullback ✓")
-            else:
-                return (True, f"Preis {distance_atr:.1f}x ATR über ST → OK ✓")
+        # Für LONG: Preis sollte NAH AM oder UNTER Supertrend sein
+        if distance_atr > max_atr_distance:
+            return (False, f"Preis {distance_atr:.1f}x ATR über ST → Pump! (max {max_atr_distance}x)")
+        elif distance_atr < 0:
+            return (True, f"Preis {abs(distance_atr):.1f}x ATR unter ST → Pullback ✓")
+        else:
+            return (True, f"Preis {distance_atr:.1f}x ATR über ST → OK ✓")
 
-        elif side == "SHORT":
-            # Für SHORT: Preis sollte NAH AM oder ÜBER Supertrend sein
-            if distance_atr < -max_atr_distance:
-                return (False, f"Preis {abs(distance_atr):.1f}x ATR unter ST → Dump! (max {max_atr_distance}x)")
-            elif distance_atr > 0:
-                return (True, f"Preis {distance_atr:.1f}x ATR über ST → Extended ✓")
-            else:
-                return (True, f"Preis {abs(distance_atr):.1f}x ATR unter ST → OK ✓")
-
-        return (True, "Supertrend OK")
-
-    def check_kama_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+    def check_kama_entry(self, symbol: str) -> Tuple[bool, str]:
         """
-        Prüft ob KAMA (Kaufman Adaptive Moving Average) einen Entry erlaubt.
+        Prüft ob KAMA (Kaufman Adaptive Moving Average) einen LONG Entry erlaubt.
         KAMA passt sich der Marktvolatilität an - smooth in Seitwärtsmärkten, reaktiv in Trends.
         Nutzt Symbol-spezifische Settings wenn verfügbar.
         Returns: (erlaubt, grund)
@@ -1141,23 +922,14 @@ class BinanceTestnetTrader:
 
         kama_trend = kama_result.get("trend", "NEUTRAL")
 
-        if side == "LONG":
-            # Für LONG: KAMA sollte UP oder NEUTRAL sein
-            if kama_trend == "DOWN":
-                return (False, f"KAMA bearish → kein Long")
-            return (True, f"KAMA {kama_trend} ✓")
+        # Für LONG: KAMA sollte UP oder NEUTRAL sein
+        if kama_trend == "DOWN":
+            return (False, f"KAMA bearish → kein Long")
+        return (True, f"KAMA {kama_trend} ✓")
 
-        elif side == "SHORT":
-            # Für SHORT: KAMA sollte DOWN oder NEUTRAL sein
-            if kama_trend == "UP":
-                return (False, f"KAMA bullish → kein Short")
-            return (True, f"KAMA {kama_trend} ✓")
-
-        return (True, "KAMA OK")
-
-    def check_jma_entry(self, symbol: str, side: str) -> Tuple[bool, str]:
+    def check_jma_entry(self, symbol: str) -> Tuple[bool, str]:
         """
-        Prüft ob JMA (Jurik Moving Average) einen Entry erlaubt.
+        Prüft ob JMA (Jurik Moving Average) einen LONG Entry erlaubt.
         JMA ist sehr smooth mit wenig Lag - gut für Trendbestätigung.
         Nutzt Symbol-spezifische Settings wenn verfügbar.
         Returns: (erlaubt, grund)
@@ -1184,19 +956,10 @@ class BinanceTestnetTrader:
 
         jma_trend = jma_result.get("trend", "NEUTRAL")
 
-        if side == "LONG":
-            # Für LONG: JMA sollte UP oder NEUTRAL sein
-            if jma_trend == "DOWN":
-                return (False, f"JMA bearish → kein Long")
-            return (True, f"JMA {jma_trend} ✓")
-
-        elif side == "SHORT":
-            # Für SHORT: JMA sollte DOWN oder NEUTRAL sein
-            if jma_trend == "UP":
-                return (False, f"JMA bullish → kein Short")
-            return (True, f"JMA {jma_trend} ✓")
-
-        return (True, "JMA OK")
+        # Für LONG: JMA sollte UP oder NEUTRAL sein
+        if jma_trend == "DOWN":
+            return (False, f"JMA bearish → kein Long")
+        return (True, f"JMA {jma_trend} ✓")
 
     def check_volume_filter(self, symbol: str) -> Tuple[bool, str]:
         """
@@ -1239,11 +1002,11 @@ class BinanceTestnetTrader:
             pass
         return None
 
-    def check_funding_rate_filter(self, symbol: str, side: str) -> Tuple[bool, str]:
+    def check_funding_rate_filter(self, symbol: str) -> Tuple[bool, str]:
         """
-        Prüft Funding Rate als Contrarian-Indikator.
-        - Hohe positive Funding → zu viele Longs → bevorzuge Shorts
-        - Hohe negative Funding → zu viele Shorts → bevorzuge Longs
+        Prüft Funding Rate als Contrarian-Indikator für LONG Entry.
+        - Hohe positive Funding → zu viele Longs → riskant
+        - Hohe negative Funding → zu viele Shorts → gut für Long
         """
         if not config.USE_FUNDING_RATE_FILTER:
             return (True, "Funding Filter deaktiviert")
@@ -1255,25 +1018,13 @@ class BinanceTestnetTrader:
         threshold = config.FUNDING_RATE_THRESHOLD
         funding_pct = funding * 100  # Als Prozent
 
-        if side == "LONG":
-            if funding > threshold:
-                # Hohe positive Funding = viele Longs = gefährlich für Long
-                return (False, f"Funding {funding_pct:.3f}% zu hoch → Longs riskant")
-            elif funding < -threshold:
-                # Negative Funding = wenige Longs = gut für Long
-                return (True, f"Funding {funding_pct:.3f}% negativ → Longs bevorzugt ✓")
-            return (True, f"Funding {funding_pct:.3f}% neutral ✓")
-
-        elif side == "SHORT":
-            if funding < -threshold:
-                # Hohe negative Funding = viele Shorts = gefährlich für Short
-                return (False, f"Funding {funding_pct:.3f}% zu negativ → Shorts riskant")
-            elif funding > threshold:
-                # Positive Funding = wenige Shorts = gut für Short
-                return (True, f"Funding {funding_pct:.3f}% positiv → Shorts bevorzugt ✓")
-            return (True, f"Funding {funding_pct:.3f}% neutral ✓")
-
-        return (True, "Funding OK")
+        if funding > threshold:
+            # Hohe positive Funding = viele Longs = gefährlich für Long
+            return (False, f"Funding {funding_pct:.3f}% zu hoch → Longs riskant")
+        elif funding < -threshold:
+            # Negative Funding = wenige Longs = gut für Long
+            return (True, f"Funding {funding_pct:.3f}% negativ → Longs bevorzugt ✓")
+        return (True, f"Funding {funding_pct:.3f}% neutral ✓")
 
     def check_trend_consistency(self, symbol: str) -> str:
         """
@@ -1682,17 +1433,17 @@ class BinanceTestnetTrader:
         info = f"BTC{btc_emoji}({btc['consensus']}/3) ETH{eth_emoji}({eth['consensus']}/3)"
 
         if direction == "BULLISH":
-            info += f" → {strength_label} BULL → Nur Longs"
+            info += f" → {strength_label} BULL → Longs OK"
         elif direction == "BEARISH":
-            info += f" → {strength_label} BEAR → Nur Shorts"
+            info += f" → {strength_label} BEAR → Vorsicht mit Longs"
         elif direction == "WEAK_BULLISH":
             info += f" → SCHWACH BULL → Longs OK"
         elif direction == "WEAK_BEARISH":
-            info += f" → SCHWACH BEAR → Shorts OK"
+            info += f" → SCHWACH BEAR → Vorsicht"
         elif direction == "KONFLIKT":
             info += f" → KONFLIKT → Kein Trade!"
         else:
-            info += f" → NEUTRAL → Beide OK"
+            info += f" → NEUTRAL → Longs OK"
 
         return {
             "direction": direction,
@@ -1757,29 +1508,18 @@ class BinanceTestnetTrader:
 
     def get_dynamic_position_limits(self) -> dict:
         """
-        Berechnet dynamische Long/Short Limits basierend auf Fear & Greed Index.
-
-        MOMENTUM-Modus (config.FEAR_GREED_MODE = "MOMENTUM"):
-        - Greed (70-100): Mehr Longs (Trend folgen)
-        - Fear (0-30): Mehr Shorts (Trend folgen)
-
-        CONTRARIAN-Modus (config.FEAR_GREED_MODE = "CONTRARIAN"):
-        - Fear (0-30): Mehr Longs (Kaufgelegenheit)
-        - Greed (70-100): Mehr Shorts (Überkauft)
-
-        Returns: {"max_longs": int, "max_shorts": int, "reason": str}
+        Berechnet dynamische Position Limits basierend auf Fear & Greed Index.
+        Returns: {"max_longs": int, "reason": str}
         """
         total_positions = config.MAX_OPEN_POSITIONS
 
-        # Wenn F&G Allocation deaktiviert → 50/50
+        # Wenn F&G Allocation deaktiviert → alle für Longs
         if not config.USE_FEAR_GREED_ALLOCATION:
-            half = total_positions // 2
             return {
-                "max_longs": half,
-                "max_shorts": total_positions - half,
+                "max_longs": total_positions,
                 "fear_greed": 50,
                 "classification": "Disabled",
-                "reason": f"F&G deaktiviert → {half}L/{total_positions - half}S"
+                "reason": f"F&G deaktiviert → {total_positions} Longs max"
             }
 
         # Versuche Fear & Greed Index zu holen
@@ -1794,48 +1534,18 @@ class BinanceTestnetTrader:
             elif market["direction"] in ["BULLISH", "WEAK_BULLISH"]:
                 value = 70  # Simuliere Greed
 
-        # Dezile: 0-10, 10-20, ..., 90-100
-        decile = min(9, value // 10)  # 0-9
-
-        # Modus-abhängige Berechnung
-        mode = getattr(config, 'FEAR_GREED_MODE', 'MOMENTUM')
-
-        if mode == "MOMENTUM":
-            # MOMENTUM: Greed = mehr Longs, Fear = mehr Shorts
-            if decile >= 7:  # Greed (70-100) → Mehr Longs
-                long_ratio = 0.7 + (decile - 7) * 0.1  # 0.7, 0.8, 0.9
-            elif decile <= 2:  # Fear (0-30) → Mehr Shorts
-                long_ratio = 0.3 - (2 - decile) * 0.1  # 0.3, 0.2, 0.1
-            else:  # Neutral
-                long_ratio = 0.5
-            mode_label = "MOM"
-        else:
-            # CONTRARIAN: Fear = mehr Longs, Greed = mehr Shorts
-            if decile <= 2:  # Fear (0-30) → Mehr Longs
-                long_ratio = 0.7 + (2 - decile) * 0.1
-            elif decile >= 7:  # Greed (70-100) → Mehr Shorts
-                long_ratio = 0.3 - (decile - 7) * 0.1
-            else:  # Neutral
-                long_ratio = 0.5
-            mode_label = "CON"
-
-        max_longs = max(1, int(total_positions * long_ratio))
-        max_shorts = max(1, total_positions - max_longs)
-
-        reason = f"F&G: {value} ({fng['classification']}) [{mode_label}] → {max_longs}L/{max_shorts}S"
+        reason = f"F&G: {value} ({fng['classification']}) → {total_positions} Longs max"
 
         return {
-            "max_longs": max_longs,
-            "max_shorts": max_shorts,
+            "max_longs": total_positions,
             "fear_greed": value,
             "classification": fng["classification"],
-            "mode": mode,
             "reason": reason
         }
 
-    def is_trade_allowed_by_market(self, trade_side: str) -> tuple:
+    def is_trade_allowed_by_market(self) -> tuple:
         """
-        Prüft ob Trade-Richtung vom Markt erlaubt ist.
+        Prüft ob LONG Trades vom Markt erlaubt sind.
         VEREINFACHT: Nur BTC Supertrend (1 Indikator).
         """
         # Einfacher BTC Supertrend Filter
@@ -1843,16 +1553,10 @@ class BinanceTestnetTrader:
             st = self.get_htf_supertrend("BTCUSDT")
 
             if st["direction"] == "BULLISH":
-                if trade_side == "SHORT":
-                    return (False, f"BTC Supertrend BULL → Keine Shorts")
                 return (True, f"BTC Supertrend BULL → Longs OK")
-
             elif st["direction"] == "BEARISH":
-                if trade_side == "LONG":
-                    return (False, f"BTC Supertrend BEAR → Keine Longs")
-                return (True, f"BTC Supertrend BEAR → Shorts OK")
-
-            return (True, "BTC Supertrend NEUTRAL → Beide OK")
+                return (False, f"BTC Supertrend BEAR → Keine Longs")
+            return (True, "BTC Supertrend NEUTRAL → Longs OK")
 
         # Legacy BTC/ETH Filter
         if config.USE_BTC_MARKET_FILTER:
@@ -1860,16 +1564,10 @@ class BinanceTestnetTrader:
             info = f"BTC {market['btc_change']:+.1f}% | ETH {market['eth_change']:+.1f}%"
 
             if market["direction"] in ["BEARISH", "WEAK_BEARISH"]:
-                if trade_side == "LONG":
-                    return (False, f"{info} - keine Longs")
-                return (True, f"{info} - Shorts OK")
-
+                return (False, f"{info} - keine Longs")
             elif market["direction"] in ["BULLISH", "WEAK_BULLISH"]:
-                if trade_side == "SHORT":
-                    return (False, f"{info} - keine Shorts")
                 return (True, f"{info} - Longs OK")
-
-            return (True, f"{info} - beide OK")
+            return (True, f"{info} - Longs OK")
 
         return (True, "Markt-Filter deaktiviert")
 
@@ -2151,10 +1849,7 @@ class BinanceTestnetTrader:
 
             for key, pos in self.positions.items():
                 current = self._get_futures_price(pos.symbol) or pos.entry_price
-                if pos.side == "LONG":
-                    pnl = (current - pos.entry_price) / pos.entry_price * 100
-                else:  # SHORT
-                    pnl = (pos.entry_price - current) / pos.entry_price * 100
+                pnl = (current - pos.entry_price) / pos.entry_price * 100
 
                 emoji = "🟢" if pnl >= 0 else "🔴"
                 trailing = " TS" if pos.peak_price > 0 else ""
@@ -2188,10 +1883,7 @@ class BinanceTestnetTrader:
         positions_data = {}
         for key, pos in self.positions.items():
             current_price = self._get_futures_price(pos.symbol) or pos.entry_price
-            if pos.side == "LONG":
-                current_pnl = (current_price - pos.entry_price) / pos.entry_price * 100
-            else:
-                current_pnl = (pos.entry_price - current_price) / pos.entry_price * 100
+            current_pnl = (current_price - pos.entry_price) / pos.entry_price * 100
 
             positions_data[key] = {
                 "symbol": pos.symbol,
@@ -2231,11 +1923,11 @@ class BinanceTestnetTrader:
 
 
 def run_testnet_auto_trading():
-    """Startet automatisches Trading auf Testnet"""
+    """Startet automatisches LONG-only Trading auf Testnet"""
     trader = BinanceTestnetTrader()
 
     print(f"\n{'='*70}")
-    print("  🤖 TESTNET AUTO-TRADING (Futures LONG & SHORT)")
+    print("  🤖 TESTNET AUTO-TRADING (Futures LONG Only)")
     print(f"{'='*70}")
     print(f"  Mode: {'TESTNET' if config.USE_TESTNET else '⚠️ LIVE!'}")
     print(f"  Position Size: ${config.MAX_POSITION_SIZE}")
@@ -2254,10 +1946,9 @@ def run_testnet_auto_trading():
         print(f"    Aktivierung: +{config.TRAILING_STOP_ACTIVATION}% | Abstand: {config.TRAILING_STOP_DISTANCE}%")
     print(f"  RSI Filter: {'✅ AN' if config.USE_RSI_FILTER else '❌ AUS'}")
     if config.USE_RSI_FILTER:
-        print(f"    Long: RSI ≤ {config.RSI_OVERSOLD} | Short: RSI ≥ {config.RSI_OVERBOUGHT}")
+        print(f"    Long: RSI ≤ {config.RSI_OVERSOLD}")
     print(f"  Mean Reversion:")
     print(f"    LONG:  Entry bei {config.BUY_LOSER_THRESHOLD}% | TP: +{config.TAKE_PROFIT_PERCENT}% | SL: -{config.STOP_LOSS_PERCENT}%")
-    print(f"    SHORT: Entry bei +{config.SHORT_GAINER_THRESHOLD}% | TP: +{config.SHORT_TAKE_PROFIT}% | SL: -{config.SHORT_STOP_LOSS}%")
     print(f"  Scan Interval: {config.SCAN_INTERVAL_SECONDS}s")
     print(f"{'='*70}")
     print("  📊 Dashboard: dashboard.html öffnen für Live-Ansicht")
@@ -2276,18 +1967,15 @@ def run_testnet_auto_trading():
             trader.check_positions_tp_sl()
 
             # Zähle offene Positionen
-            long_count = len([p for p in trader.positions.values() if p.side == "LONG"])
-            short_count = len([p for p in trader.positions.values() if p.side == "SHORT"])
+            long_count = len(trader.positions)
 
             # Dynamische Limits basierend auf Fear & Greed Index
             limits = trader.get_dynamic_position_limits()
             max_longs = limits["max_longs"]
-            max_shorts = limits["max_shorts"]
             print(f"  📊 {limits['reason']}")
 
             # 2. Markt-Check (HTF Supertrend oder BTC/ETH)
-            long_allowed, long_reason = trader.is_trade_allowed_by_market("LONG")
-            short_allowed, short_reason = trader.is_trade_allowed_by_market("SHORT")
+            long_allowed, long_reason = trader.is_trade_allowed_by_market()
 
             if config.USE_HTF_SUPERTREND:
                 st = trader.get_htf_supertrend("BTCUSDT")
@@ -2299,21 +1987,16 @@ def run_testnet_auto_trading():
 
             if not long_allowed:
                 print(f"  ⛔ Keine Longs: {long_reason}")
-            if not short_allowed:
-                print(f"  ⛔ Keine Shorts: {short_reason}")
 
             # 3. BREAKOUT DETECTION (wenn aktiviert)
-            if config.USE_BREAKOUT_DETECTION and (long_count < max_longs or short_count < max_shorts):
+            if config.USE_BREAKOUT_DETECTION and long_count < max_longs and long_allowed:
                 print(f"\n[{timestamp}] 🔍 Suche Breakout-Signale...")
                 breakout_signals = trader.get_breakout_signals(5)
 
                 for coin in breakout_signals:
-                    if coin["breakout"] == "BREAKOUT_UP" and long_count < max_longs and long_allowed:
+                    if coin["breakout"] == "BREAKOUT_UP" and long_count < max_longs:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
-                            # Nicht LONG wenn bereits SHORT offen
-                            if f"{coin['symbol']}_SHORT" in trader.positions:
-                                continue
                             # Skip wenn nicht tradeable (<50% Win Rate)
                             if not trader.is_symbol_tradeable(coin["symbol"]):
                                 continue
@@ -2323,33 +2006,15 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["breakout"] == "BREAKOUT_DOWN" and short_count < max_shorts and short_allowed:
-                        key = f"{coin['symbol']}_SHORT"
-                        if key not in trader.positions:
-                            # Nicht SHORT wenn bereits LONG offen
-                            if f"{coin['symbol']}_LONG" in trader.positions:
-                                continue
-                            # Skip wenn nicht tradeable (<50% Win Rate)
-                            if not trader.is_symbol_tradeable(coin["symbol"]):
-                                continue
-                            print(f"\n[{timestamp}] 💥 BREAKOUT SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (unter {config.BREAKOUT_LOOKBACK_DAYS}-Tage Low)")
-                            result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
-                            if result:
-                                short_count += 1
-                                break
-
             # 3b. TREND-FOLLOWING (Fallback wenn kein Breakout)
-            elif config.USE_TREND_FILTER and (long_count < max_longs or short_count < max_shorts):
+            elif config.USE_TREND_FILTER and long_count < max_longs and long_allowed:
                 print(f"\n[{timestamp}] 🔍 Suche Trend-Signale...")
                 trend_signals = trader.get_trend_signals(5)
 
                 for coin in trend_signals:
-                    if coin["trend"] == "UP" and long_count < max_longs and long_allowed:
+                    if coin["trend"] == "UP" and long_count < max_longs:
                         key = f"{coin['symbol']}_LONG"
                         if key not in trader.positions:
-                            # Nicht LONG wenn bereits SHORT offen
-                            if f"{coin['symbol']}_SHORT" in trader.positions:
-                                continue
                             # Skip wenn nicht tradeable (<50% Win Rate)
                             if not trader.is_symbol_tradeable(coin["symbol"]):
                                 continue
@@ -2359,34 +2024,12 @@ def run_testnet_auto_trading():
                                 long_count += 1
                                 break
 
-                    elif coin["trend"] == "DOWN" and short_count < max_shorts and short_allowed:
-                        key = f"{coin['symbol']}_SHORT"
-                        if key not in trader.positions:
-                            # Nicht SHORT wenn bereits LONG offen
-                            if f"{coin['symbol']}_LONG" in trader.positions:
-                                continue
-                            # Skip wenn nicht tradeable (<50% Win Rate)
-                            if not trader.is_symbol_tradeable(coin["symbol"]):
-                                continue
-                            print(f"\n[{timestamp}] 📉 TREND SHORT: {coin['base']} @ {coin['change_percent']:+.1f}% (3-Tage DOWN)")
-                            result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
-                            if result:
-                                short_count += 1
-                                break
-
-            # 4. MEAN REVERSION (Fallback wenn keine Trend-Signale)
-            # Nur wenn Trend-Filter aus ist ODER keine Trend-Signale gefunden wurden
-
-            # LONG: Buy the Dip
+            # 4. MEAN REVERSION LONG: Buy the Dip
             if long_count < max_longs and long_allowed:
                 losers = trader.get_top_losers(5)
                 for coin in losers:
                     key = f"{coin['symbol']}_LONG"
                     if key not in trader.positions:
-                        # WICHTIG: Nicht LONG gehen wenn bereits SHORT offen!
-                        if f"{coin['symbol']}_SHORT" in trader.positions:
-                            continue
-
                         # Skip wenn nicht tradeable (<50% Win Rate)
                         if not trader.is_symbol_tradeable(coin["symbol"]):
                             continue
@@ -2401,7 +2044,7 @@ def run_testnet_auto_trading():
 
                         # RSI Filter: Nur kaufen wenn überverkauft
                         if config.USE_RSI_FILTER:
-                            rsi_ok, rsi_reason = trader.check_rsi_entry(coin["symbol"], "LONG")
+                            rsi_ok, rsi_reason = trader.check_rsi_entry(coin["symbol"])
                             if not rsi_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
                                 trader.filter_stats.record_blocked(coin["symbol"], "LONG", "rsi", coin["price"])
@@ -2409,7 +2052,7 @@ def run_testnet_auto_trading():
 
                         # Supertrend Entry Filter: Nicht einsteigen wenn zu weit über ST (Chasing)
                         if config.USE_SUPERTREND_ENTRY_FILTER:
-                            st_ok, st_reason = trader.check_supertrend_entry(coin["symbol"], "LONG")
+                            st_ok, st_reason = trader.check_supertrend_entry(coin["symbol"])
                             if not st_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
                                 trader.filter_stats.record_blocked(coin["symbol"], "LONG", "supertrend_entry", coin["price"])
@@ -2425,7 +2068,7 @@ def run_testnet_auto_trading():
 
                         # Funding Rate Filter: Contrarian bei extremer Funding
                         if config.USE_FUNDING_RATE_FILTER:
-                            fund_ok, fund_reason = trader.check_funding_rate_filter(coin["symbol"], "LONG")
+                            fund_ok, fund_reason = trader.check_funding_rate_filter(coin["symbol"])
                             if not fund_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {fund_reason}")
                                 trader.filter_stats.record_blocked(coin["symbol"], "LONG", "funding", coin["price"])
@@ -2433,7 +2076,7 @@ def run_testnet_auto_trading():
 
                         # KAMA Filter: Adaptive MA Trend
                         if config.USE_KAMA_FILTER:
-                            kama_ok, kama_reason = trader.check_kama_entry(coin["symbol"], "LONG")
+                            kama_ok, kama_reason = trader.check_kama_entry(coin["symbol"])
                             if not kama_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {kama_reason}")
                                 trader.filter_stats.record_blocked(coin["symbol"], "LONG", "kama", coin["price"])
@@ -2441,7 +2084,7 @@ def run_testnet_auto_trading():
 
                         # JMA Filter: Smooth MA Trend
                         if config.USE_JMA_FILTER:
-                            jma_ok, jma_reason = trader.check_jma_entry(coin["symbol"], "LONG")
+                            jma_ok, jma_reason = trader.check_jma_entry(coin["symbol"])
                             if not jma_ok:
                                 print(f"  ⏭️  Skip {coin['base']} - {jma_reason}")
                                 trader.filter_stats.record_blocked(coin["symbol"], "LONG", "jma", coin["price"])
@@ -2452,94 +2095,18 @@ def run_testnet_auto_trading():
                         if result:
                             break
 
-            # SHORT: Fade the Pump
-            if short_count < max_shorts and short_allowed:
-                gainers = trader.get_top_gainers(5)
-                for coin in gainers:
-                    key = f"{coin['symbol']}_SHORT"
-                    if key not in trader.positions:
-                        # WICHTIG: Nicht SHORT gehen wenn bereits LONG offen!
-                        if f"{coin['symbol']}_LONG" in trader.positions:
-                            continue
-
-                        # Skip wenn nicht tradeable (<50% Win Rate)
-                        if not trader.is_symbol_tradeable(coin["symbol"]):
-                            continue
-
-                        # Bei aktivem Trend-Filter: Prüfe ob NICHT im Uptrend
-                        if config.USE_TREND_FILTER:
-                            trend = trader.check_trend_consistency(coin["symbol"])
-                            if trend == "UP":
-                                print(f"  ⏭️  Skip {coin['base']} - im Uptrend (kein Mean Reversion)")
-                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "trend", coin["price"])
-                                continue
-
-                        # RSI Filter: Nur shorten wenn überkauft
-                        if config.USE_RSI_FILTER:
-                            rsi_ok, rsi_reason = trader.check_rsi_entry(coin["symbol"], "SHORT")
-                            if not rsi_ok:
-                                print(f"  ⏭️  Skip {coin['base']} - {rsi_reason}")
-                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "rsi", coin["price"])
-                                continue
-
-                        # Supertrend Entry Filter: Nicht einsteigen wenn zu weit unter ST (Chasing)
-                        if config.USE_SUPERTREND_ENTRY_FILTER:
-                            st_ok, st_reason = trader.check_supertrend_entry(coin["symbol"], "SHORT")
-                            if not st_ok:
-                                print(f"  ⏭️  Skip {coin['base']} - {st_reason}")
-                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "supertrend_entry", coin["price"])
-                                continue
-                            print(f"  ✓ ST Entry: {st_reason}")
-
-                        # Volume Filter: Nur bei überdurchschnittlichem Volume
-                        if config.USE_VOLUME_FILTER:
-                            vol_ok, vol_reason = trader.check_volume_filter(coin["symbol"])
-                            if not vol_ok:
-                                print(f"  ⏭️  Skip {coin['base']} - {vol_reason}")
-                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "volume", coin["price"])
-                                continue
-
-                        # Funding Rate Filter: Contrarian bei extremer Funding
-                        if config.USE_FUNDING_RATE_FILTER:
-                            fund_ok, fund_reason = trader.check_funding_rate_filter(coin["symbol"], "SHORT")
-                            if not fund_ok:
-                                print(f"  ⏭️  Skip {coin['base']} - {fund_reason}")
-                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "funding", coin["price"])
-                                continue
-
-                        # KAMA Filter: Adaptive MA Trend
-                        if config.USE_KAMA_FILTER:
-                            kama_ok, kama_reason = trader.check_kama_entry(coin["symbol"], "SHORT")
-                            if not kama_ok:
-                                print(f"  ⏭️  Skip {coin['base']} - {kama_reason}")
-                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "kama", coin["price"])
-                                continue
-
-                        # JMA Filter: Smooth MA Trend
-                        if config.USE_JMA_FILTER:
-                            jma_ok, jma_reason = trader.check_jma_entry(coin["symbol"], "SHORT")
-                            if not jma_ok:
-                                print(f"  ⏭️  Skip {coin['base']} - {jma_reason}")
-                                trader.filter_stats.record_blocked(coin["symbol"], "SHORT", "jma", coin["price"])
-                                continue
-
-                        print(f"\n[{timestamp}] 📈 MEAN REV SHORT: {coin['base']} @ +{coin['change_percent']:.1f}%")
-                        result = trader.futures_short(coin["symbol"], config.MAX_POSITION_SIZE)
-                        if result:
-                            break
-
-            # 4. Status
+            # 5. Status
             futures_bal = trader.get_futures_balance()
             print(f"\n[{timestamp}] Positionen: {len(trader.positions)} | "
                   f"Futures: ${futures_bal:,.0f}")
 
-            # 5. Dashboard aktualisieren
+            # 6. Dashboard aktualisieren
             trader.export_dashboard_data()
 
-            # 6. Filter-Stats: Blocked Trades nach 4h auswerten
+            # 7. Filter-Stats: Blocked Trades nach 4h auswerten
             trader.filter_stats.check_blocked_outcomes(trader._get_futures_price)
 
-            # 7. Filter-Stats alle 10 Zyklen anzeigen
+            # 8. Filter-Stats alle 10 Zyklen anzeigen
             if not hasattr(trader, '_stats_cycle'):
                 trader._stats_cycle = 0
             trader._stats_cycle += 1
@@ -2609,15 +2176,12 @@ if __name__ == "__main__":
             print("  CRYPTO TOPMOVER - HILFE")
             print("="*60)
             print("\n  Verwendung:")
-            print("    python testnet_trader.py           → Live Trading")
+            print("    python testnet_trader.py           → Live Trading (LONG only)")
             print("    python testnet_trader.py backtest  → Backtest starten")
             print("    python testnet_trader.py analyze   → Peak-Analyse")
             print("    python testnet_trader.py stats     → Filter-Statistiken anzeigen")
             print("    python testnet_trader.py resetstats → Statistiken zurücksetzen")
             print("    python testnet_trader.py help      → Diese Hilfe")
-            print("\n  Config (config.py):")
-            print("    FEAR_GREED_MODE = 'MOMENTUM'    → Greed=Longs, Fear=Shorts")
-            print("    FEAR_GREED_MODE = 'CONTRARIAN'  → Fear=Longs, Greed=Shorts")
             print("="*60 + "\n")
 
         else:

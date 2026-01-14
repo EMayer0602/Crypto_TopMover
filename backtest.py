@@ -236,47 +236,6 @@ class Backtester:
                         position = None
                         peak_price = 0.0
 
-                elif position["side"] == "SHORT":
-                    pnl = (position["entry"] - price) / position["entry"] * 100
-
-                    # Trailing Stop
-                    if trailing_stop and pnl >= ts_activation:
-                        if peak_price == 0 or price < peak_price:
-                            peak_price = price
-                        ts_level = peak_price * (1 + ts_distance / 100)
-                        if price >= ts_level:
-                            trades.append({
-                                "side": "SHORT",
-                                "entry": position["entry"],
-                                "exit": price,
-                                "pnl": pnl,
-                                "exit_reason": "TRAILING_STOP"
-                            })
-                            position = None
-                            peak_price = 0.0
-                            continue
-
-                    # TP/SL
-                    if pnl >= tp_percent:
-                        trades.append({
-                            "side": "SHORT",
-                            "entry": position["entry"],
-                            "exit": price,
-                            "pnl": pnl,
-                            "exit_reason": "TP"
-                        })
-                        position = None
-                        peak_price = 0.0
-                    elif pnl <= -sl_percent:
-                        trades.append({
-                            "side": "SHORT",
-                            "entry": position["entry"],
-                            "exit": price,
-                            "pnl": pnl,
-                            "exit_reason": "SL"
-                        })
-                        position = None
-                        peak_price = 0.0
                 continue
 
             # Entry Logic (nur wenn keine Position)
@@ -309,24 +268,6 @@ class Backtester:
                         continue
 
                 position = {"side": "LONG", "entry": price}
-                peak_price = price
-
-            # SHORT Entry: Coin stark gestiegen
-            elif change_24h >= 10:  # Gestiegen
-                # Supertrend Filter
-                if use_supertrend and btc_dir == "BULLISH":
-                    continue
-
-                # RSI Filter (für Short: overbought)
-                if use_rsi and rsi_values[i] < (100 - rsi_oversold):
-                    continue
-
-                # Volume Spike Filter
-                if use_volume_spike:
-                    if volume_sma[i] > 0 and current["quote_volume"] < volume_sma[i] * volume_mult:
-                        continue
-
-                position = {"side": "SHORT", "entry": price}
                 peak_price = price
 
         # Statistiken berechnen

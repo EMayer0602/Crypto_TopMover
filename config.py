@@ -49,7 +49,6 @@ TRAILING_STOP_DISTANCE = 1.5     # Trailing Stop folgt mit 1.5% Abstand
 USE_RSI_FILTER = True            # RSI Filter aktivieren
 RSI_PERIOD = 14                  # RSI Periode
 RSI_OVERSOLD = 45                # Für Longs: RSI unter 45 (gelockert von 35)
-RSI_OVERBOUGHT = 55              # Für Shorts: RSI über 55 (gelockert von 65)
 
 # Supertrend Entry Filter (verhindert Einstieg nach Pump)
 USE_SUPERTREND_ENTRY_FILTER = True    # Supertrend als Entry-Filter aktivieren
@@ -90,11 +89,6 @@ AUTO_BUY_ENABLED = True           # Automatisch kaufen
 BUY_LOSER_THRESHOLD = -7.0        # Kaufe Coins ab -7% (gelockert von -10%)
 MIN_LOSER_VOLUME = 5000000        # Mindestvolumen für Auto-Buy (5M USDT)
 
-# SHORT Strategie (Futures)
-SHORT_GAINER_THRESHOLD = 15.0     # Shorte Coins ab +15% (gelockert von +25%)
-SHORT_TAKE_PROFIT = 5.0           # TP für Shorts
-SHORT_STOP_LOSS = 8.0             # SL für Shorts
-
 # Trend-Filter Einstellungen
 TREND_CHECK_DAYS = 3              # Anzahl Tage für Trend-Check
 TREND_MAX_PULLBACK = 2.0          # Max. erlaubte Gegenbewegung in % (sonst = choppy)
@@ -119,8 +113,6 @@ SUPERTREND_MULTIPLIER = 3.0       # ATR Multiplikator
 
 # Fear & Greed Position Allocation
 USE_FEAR_GREED_ALLOCATION = True  # Dynamische Position-Verteilung aktivieren
-FEAR_GREED_MODE = "MOMENTUM"      # "MOMENTUM" = Greed→Longs, Fear→Shorts
-                                  # "CONTRARIAN" = Fear→Longs, Greed→Shorts
 
 # Scanner Einstellungen
 SCAN_INTERVAL_SECONDS = 60  # Wie oft nach neuen Top Movern scannen
