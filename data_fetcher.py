@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import random
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
 import requests
 
-from config import BINANCE_BASE_URL, MAX_RETRIES, REQUEST_PAUSE_SECONDS, REQUEST_TIMEOUT
+from config import (
+    BINANCE_BASE_URL,
+    MAX_RETRIES,
+    RATE_LIMIT_BASE_SECONDS,
+    RATE_LIMIT_JITTER_SECONDS,
+    REQUEST_PAUSE_SECONDS,
+    REQUEST_TIMEOUT,
+)
 
 
 class BinanceAPIError(RuntimeError):
@@ -28,7 +36,7 @@ def _request_json(
             if response.status_code == 429:
                 last_exc = BinanceAPIError("Binance API rate limit hit (429).")
                 if attempt < MAX_RETRIES:
-                    time.sleep(2 ** (attempt - 1))
+                    time.sleep(_backoff_delay(attempt))
                     continue
                 break
             response.raise_for_status()
@@ -36,10 +44,16 @@ def _request_json(
         except requests.RequestException as exc:
             last_exc = exc
             if attempt < MAX_RETRIES:
-                time.sleep(2 ** (attempt - 1))
+                time.sleep(_backoff_delay(attempt))
                 continue
             break
     raise BinanceAPIError(f"Binance API request failed for {path}") from last_exc
+
+
+def _backoff_delay(attempt: int) -> float:
+    base = RATE_LIMIT_BASE_SECONDS * (2 ** (attempt - 1))
+    jitter = random.uniform(0, RATE_LIMIT_JITTER_SECONDS)
+    return base + jitter
 
 
 def _ms_to_iso(value: Optional[int]) -> str:
@@ -87,7 +101,6 @@ def fetch_kline(
             "No klines returned for "
             f"{symbol} {interval} start={_ms_to_iso(start_ms)} end={_ms_to_iso(end_ms)}"
         )
-    time.sleep(REQUEST_PAUSE_SECONDS)
     return data[0]
 
 
@@ -101,4 +114,5 @@ def fetch_first_last_kline(
 ) -> tuple[Sequence[Any], Sequence[Any]]:
     first = fetch_kline(session, symbol, interval, start_ms=start_ms)
     last = fetch_kline(session, symbol, interval, end_ms=end_ms)
+    time.sleep(REQUEST_PAUSE_SECONDS)
     return first, last
