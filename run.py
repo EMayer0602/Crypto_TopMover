@@ -12,7 +12,7 @@ from data_fetcher import fetch_first_last_kline, get_top_symbols_by_quote_volume
 
 
 def parse_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def ms_to_iso(value: int) -> str:

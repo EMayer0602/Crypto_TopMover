@@ -28,7 +28,7 @@ def _request_json(
             if response.status_code == 429:
                 last_exc = BinanceAPIError("Binance API rate limit hit (429).")
                 if attempt < MAX_RETRIES:
-                    time.sleep(2**attempt)
+                    time.sleep(2 ** (attempt - 1))
                     continue
                 break
             response.raise_for_status()
@@ -36,7 +36,7 @@ def _request_json(
         except requests.RequestException as exc:
             last_exc = exc
             if attempt < MAX_RETRIES:
-                time.sleep(2**attempt)
+                time.sleep(2 ** (attempt - 1))
                 continue
             break
     raise BinanceAPIError(f"Binance API request failed for {path}") from last_exc
