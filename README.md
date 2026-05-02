@@ -26,4 +26,5 @@ python run.py --quote USDC --top-n 20 --start-date 2024-01-01T00:00:00Z \
 ```
 
 The script writes a CSV report with open/close prices and PnL percentage for each
-symbol and interval.
+symbol and interval, sorted by highest PnL percentage overall. It also prints the
+best overall positive PnL (symbol + interval) when available.

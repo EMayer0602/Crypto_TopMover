@@ -62,9 +62,7 @@ def build_report(
                     }
                 )
     frame = pd.DataFrame(rows)
-    return frame.sort_values(
-        ["interval", "pnl_pct"], ascending=[True, False], na_position="last"
-    )
+    return frame.sort_values("pnl_pct", ascending=False, na_position="last")
 
 
 def main() -> None:
@@ -100,10 +98,22 @@ def main() -> None:
         symbols = get_top_symbols_by_quote_volume(session, args.quote, args.top_n)
 
     report = build_report(symbols, intervals, start_ms, end_ms)
+    best_positive = report.loc[report["pnl_pct"].gt(0)]
+    best_row = None
+    if not best_positive.empty:
+        best_row = best_positive.nlargest(1, "pnl_pct").iloc[0]
     output_name = args.output or f"pnl_report_{report_time:%Y%m%d_%H%M%S}.csv"
     report.to_csv(output_name, index=False)
 
     print(f"Top {len(symbols)} {args.quote} pairs: {', '.join(symbols)}")
+    if best_row is None:
+        print("No positive PnL found across all symbols and intervals.")
+    else:
+        print(
+            "Best overall PnL: "
+            f"{best_row['symbol']} ({best_row['interval']}) "
+            f"{best_row['pnl_pct']:.2f}%"
+        )
     print(f"Saved PnL report to {output_name}")
 
 
