@@ -64,7 +64,9 @@ def build_report(
                     }
                 )
     frame = pd.DataFrame(rows)
-    return frame.sort_values(["interval", "pnl_pct"], ascending=[True, False])
+    return frame.sort_values(
+        ["interval", "pnl_pct"], ascending=[True, False], na_position="last"
+    )
 
 
 def main() -> None:

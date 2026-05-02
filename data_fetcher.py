@@ -18,7 +18,7 @@ from config import (
 
 
 class BinanceAPIError(RuntimeError):
-    pass
+    """Raised when Binance API requests fail, rate-limit, or return bans."""
 
 
 def _request_json(
@@ -113,6 +113,7 @@ def fetch_first_last_kline(
     end_ms: int,
 ) -> tuple[Sequence[Any], Sequence[Any]]:
     first = fetch_kline(session, symbol, interval, start_ms=start_ms)
+    time.sleep(REQUEST_PAUSE_SECONDS)
     last = fetch_kline(session, symbol, interval, end_ms=end_ms)
     time.sleep(REQUEST_PAUSE_SECONDS)
     return first, last
