@@ -98,10 +98,11 @@ def main() -> None:
         symbols = get_top_symbols_by_quote_volume(session, args.quote, args.top_n)
 
     report = build_report(symbols, intervals, start_ms, end_ms)
-    best_positive = report.loc[report["pnl_pct"].gt(0)]
     best_row = None
-    if not best_positive.empty:
-        best_row = best_positive.nlargest(1, "pnl_pct").iloc[0]
+    if not report.empty:
+        top_row = report.iloc[0]
+        if pd.notna(top_row["pnl_pct"]) and top_row["pnl_pct"] > 0:
+            best_row = top_row
     output_name = args.output or f"pnl_report_{report_time:%Y%m%d_%H%M%S}.csv"
     report.to_csv(output_name, index=False)
 
