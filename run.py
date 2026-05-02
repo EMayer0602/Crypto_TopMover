@@ -38,14 +38,12 @@ def build_report(
                 )
                 first_open = float(first[1])
                 last_close = float(last[4])
+                pnl_abs = float("nan")
+                pnl_pct = float("nan")
                 status = "ok"
                 if first_open < 0 or last_close < 0:
-                    pnl_abs = float("nan")
-                    pnl_pct = float("nan")
                     status = "negative_price"
                 elif first_open == 0 or last_close == 0:
-                    pnl_abs = float("nan")
-                    pnl_pct = float("nan")
                     status = "zero_price"
                 else:
                     pnl_abs = last_close - first_open

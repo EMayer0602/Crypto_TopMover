@@ -32,7 +32,11 @@ def _request_json(
         try:
             response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
             if response.status_code == 418:
-                raise BinanceAPIError("Binance API IP banned (418).")
+                last_exc = BinanceAPIError("Binance API IP banned (418).")
+                if attempt < MAX_RETRIES:
+                    time.sleep(_backoff_delay(attempt))
+                    continue
+                break
             if response.status_code == 429:
                 last_exc = BinanceAPIError("Binance API rate limit hit (429).")
                 if attempt < MAX_RETRIES:
