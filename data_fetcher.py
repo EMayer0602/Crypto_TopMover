@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
 import requests
 
@@ -16,7 +16,7 @@ class BinanceAPIError(RuntimeError):
 def _request_json(
     session: requests.Session,
     path: str,
-    params: Optional[Dict[str, Any]] = None,
+    params: Optional[dict[str, Any]] = None,
 ) -> Any:
     url = f"{BINANCE_BASE_URL}{path}"
     last_exc: Optional[Exception] = None
@@ -37,6 +37,8 @@ def _request_json(
             last_exc = exc
             if attempt < MAX_RETRIES:
                 time.sleep(2**attempt)
+                continue
+            break
     raise BinanceAPIError(f"Binance API request failed for {path}") from last_exc
 
 
@@ -50,9 +52,9 @@ def get_top_symbols_by_quote_volume(
     session: requests.Session,
     quote_asset: str,
     top_n: int,
-) -> List[str]:
+) -> list[str]:
     payload = _request_json(session, "/api/v3/ticker/24hr")
-    ranked: List[Tuple[str, float]] = []
+    ranked: list[tuple[str, float]] = []
     for item in payload:
         symbol = item.get("symbol")
         if not symbol or not symbol.endswith(quote_asset):
@@ -74,7 +76,7 @@ def fetch_kline(
     start_ms: Optional[int] = None,
     end_ms: Optional[int] = None,
 ) -> Sequence[Any]:
-    params: Dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": 1}
+    params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": 1}
     if start_ms is not None:
         params["startTime"] = int(start_ms)
     if end_ms is not None:
@@ -96,7 +98,7 @@ def fetch_first_last_kline(
     *,
     start_ms: int,
     end_ms: int,
-) -> Tuple[Sequence[Any], Sequence[Any]]:
+) -> tuple[Sequence[Any], Sequence[Any]]:
     first = fetch_kline(session, symbol, interval, start_ms=start_ms)
     last = fetch_kline(session, symbol, interval, end_ms=end_ms)
     return first, last

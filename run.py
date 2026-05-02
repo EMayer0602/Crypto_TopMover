@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-from typing import List, Sequence
+from typing import Sequence
 
 import pandas as pd
 import requests
@@ -20,7 +20,7 @@ def ms_to_iso(value: int) -> str:
 
 
 def build_report(
-    symbols: List[str],
+    symbols: list[str],
     intervals: Sequence[str],
     start_ms: int,
     end_ms: int,
