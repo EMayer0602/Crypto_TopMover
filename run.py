@@ -38,8 +38,14 @@ def build_report(
                 )
                 first_open = float(first[1])
                 last_close = float(last[4])
-                pnl_abs = last_close - first_open
-                pnl_pct = (pnl_abs / first_open) * 100 if first_open else 0.0
+                status = "ok"
+                if first_open <= 0 or last_close <= 0:
+                    pnl_abs = float("nan")
+                    pnl_pct = float("nan")
+                    status = "invalid_price"
+                else:
+                    pnl_abs = last_close - first_open
+                    pnl_pct = (pnl_abs / first_open) * 100
                 rows.append(
                     {
                         "interval": interval,
@@ -48,6 +54,7 @@ def build_report(
                         "end_close": last_close,
                         "pnl_abs": pnl_abs,
                         "pnl_pct": pnl_pct,
+                        "status": status,
                         "first_open_time": ms_to_iso(int(first[0])),
                         "last_close_time": ms_to_iso(int(last[6])),
                     }
@@ -77,14 +84,15 @@ def main() -> None:
 
     start_dt = parse_datetime(args.start_date)
     start_ms = int(start_dt.timestamp() * 1000)
-    end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    report_time = datetime.now(timezone.utc)
+    end_ms = int(report_time.timestamp() * 1000)
     intervals = [interval.strip() for interval in args.intervals.split(",") if interval]
 
     with requests.Session() as session:
         symbols = get_top_symbols_by_quote_volume(session, args.quote, args.top_n)
 
     report = build_report(symbols, intervals, start_ms, end_ms)
-    output_name = args.output or f"pnl_report_{end_ms}.csv"
+    output_name = args.output or f"pnl_report_{report_time:%Y%m%d_%H%M%S}.csv"
     report.to_csv(output_name, index=False)
 
     print(f"Top {len(symbols)} {args.quote} pairs: {', '.join(symbols)}")

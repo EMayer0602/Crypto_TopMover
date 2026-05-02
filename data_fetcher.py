@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 import requests
@@ -22,7 +23,9 @@ def _request_json(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            if response.status_code in {418, 429}:
+            if response.status_code == 418:
+                raise BinanceAPIError("Binance API IP banned (418).")
+            if response.status_code == 429:
                 time.sleep(2**attempt)
                 continue
             response.raise_for_status()
@@ -31,6 +34,12 @@ def _request_json(
             last_exc = exc
             time.sleep(2**attempt)
     raise BinanceAPIError(f"Binance API request failed for {path}") from last_exc
+
+
+def _ms_to_iso(value: Optional[int]) -> str:
+    if value is None:
+        return "n/a"
+    return datetime.fromtimestamp(value / 1000, tz=timezone.utc).isoformat()
 
 
 def get_top_symbols_by_quote_volume(
@@ -69,7 +78,8 @@ def fetch_kline(
     data = _request_json(session, "/api/v3/klines", params=params)
     if not data:
         raise BinanceAPIError(
-            f"No klines returned for {symbol} {interval} {start_ms} {end_ms}"
+            "No klines returned for "
+            f"{symbol} {interval} start={_ms_to_iso(start_ms)} end={_ms_to_iso(end_ms)}"
         )
     time.sleep(REQUEST_PAUSE_SECONDS)
     return data[0]
