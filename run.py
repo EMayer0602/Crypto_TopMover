@@ -86,7 +86,11 @@ def main() -> None:
     start_ms = int(start_dt.timestamp() * 1000)
     report_time = datetime.now(timezone.utc)
     end_ms = int(report_time.timestamp() * 1000)
-    intervals = [interval.strip() for interval in args.intervals.split(",") if interval]
+    intervals = [
+        interval.strip()
+        for interval in args.intervals.split(",")
+        if interval.strip()
+    ]
 
     with requests.Session() as session:
         symbols = get_top_symbols_by_quote_volume(session, args.quote, args.top_n)
