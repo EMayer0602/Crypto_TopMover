@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -48,7 +48,7 @@ def get_top_symbols_by_quote_volume(
     top_n: int,
 ) -> List[str]:
     payload = _request_json(session, "/api/v3/ticker/24hr")
-    ranked: List[tuple[str, float]] = []
+    ranked: List[Tuple[str, float]] = []
     for item in payload:
         symbol = item.get("symbol")
         if not symbol or not symbol.endswith(quote_asset):
@@ -92,7 +92,7 @@ def fetch_first_last_kline(
     *,
     start_ms: int,
     end_ms: int,
-) -> tuple[Sequence[Any], Sequence[Any]]:
+) -> Tuple[Sequence[Any], Sequence[Any]]:
     first = fetch_kline(session, symbol, interval, start_ms=start_ms)
     last = fetch_kline(session, symbol, interval, end_ms=end_ms)
     return first, last
